@@ -1,0 +1,360 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)  # For data manipulation and visualization
+library(vegan)      # For diversity analyses
+library(phyloseq)   # For microbiome data analysis
+library(ggplot2)    # For enhanced visualizations
+library(microbiome)
+library(dplyr)
+library(tidyr)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+```
+
+Positive Inclusion Criteria
+```{r}
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data_filtered <- species_data %>%
+  filter(tax_level == 1) %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50) %>% 
+  filter(!is.na(base_sample)) %>%  # filter out Negative Controls
+  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+```
+
+
+Taxonomic Composition
+```{r}
+# Create a taxa table
+taxa_table <- species_data_filtered %>%
+  select(tax_id, tax_level, name, genus_tax_id, category, library_prep, nt_rpm, nt_count, base_sample) %>%
+  distinct() %>%  # only unique taxa
+  filter(!is.na(category)) %>%   # filter out species with no aligned category
+  filter(category %in% c("archaea","bacteria","eukaryota","viruses")) # because some blank categories are not NA
+
+# Create abundance matrix using RPM values (or counts depending on your preference)
+abundance_matrix <- species_data_filtered %>%
+  select(tax_id, sample_name, nt_rpm) %>%
+  pivot_wider(names_from = sample_name, values_from = nt_rpm, values_fill = 0)
+
+# Compare library prep at different taxonomic levels (e.g., phylum level)
+phylum_composition <- taxa_table %>%
+  group_by(category, library_prep) %>%
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  group_by(library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+```
+
+```{r}
+# Visualize composition by library prep method
+tax_comp_libprep = ggplot(phylum_composition, aes(x = library_prep, y = relative_abundance, fill = category)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Taxonomic Composition by Library Prep Method",
+       x = "", 
+       y = "Relative Abundance (%)",
+       fill = "Phylum") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+tax_comp_libprep
+```
+
+
+
+Diversity
+
+```{r}
+
+# 1. Aggregate counts per tax_id per sample
+species_agg <- species_data_filtered %>%
+  group_by(sample_name, tax_id) %>%
+  summarise(nt_count = sum(nt_count, na.rm = TRUE), .groups = "drop")
+
+# 2. Create abundance matrix (taxa x samples)
+abundance_matrix <- species_agg %>%
+  pivot_wider(
+    names_from = sample_name, 
+    values_from = nt_count,
+    values_fill = 0
+  )
+
+# Convert to numeric matrix and set rownames
+abund_mat <- as.matrix(abundance_matrix[,-1])
+rownames(abund_mat) <- abundance_matrix$tax_id
+
+# 3. Compute diversity metrics per sample
+diversity_tbl <- data.frame(
+  sample_name = colnames(abund_mat),
+  Shannon = apply(abund_mat, 2, vegan::diversity, index = "shannon"),
+  Simpson = apply(abund_mat, 2, vegan::diversity, index = "simpson"),
+  Richness = apply(abund_mat, 2, function(x) sum(x > 0))
+)
+
+# 4. Add library prep info
+diversity_tbl <- diversity_tbl %>%
+  left_join(species_data_filtered %>% 
+              select(sample_name, library_prep, base_sample) %>% distinct(),
+            by = "sample_name")
+
+# 5. Pair NGS and MSSPE using base_sample
+diversity_paired <- diversity_tbl %>%
+  pivot_wider(
+    id_cols = base_sample,
+    names_from = library_prep,
+    values_from = c(Shannon, Simpson, Richness)
+  )
+
+# 5. Wilcoxon test per metric
+metrics <- c("Shannon", "Simpson", "Richness")
+
+results <- lapply(metrics, function(metric){
+  ngs <- diversity_paired[[paste0(metric, "_NGS")]]
+  msspe <- diversity_paired[[paste0(metric, "_MSSPE")]]
+  
+  test <- wilcox.test(ngs, msspe, paired = TRUE)
+  
+  data.frame(
+    metric = metric,
+    ngs_value = median(ngs, na.rm = TRUE),
+    msspe_value = median(msspe, na.rm = TRUE),
+    statistic = test$statistic,
+    p_value = test$p.value
+  )
+})
+
+results_tbl <- do.call(rbind, results)
+results_tbl
+```
+
+```{r}
+# Compare alpha diversity between library prep methods
+diversity_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Shannon, fill = library_prep)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Alpha Diversity (Eveness) by Library Prep Method",
+       x = "", 
+       y = "Shannon Diversity Index") +
+  theme(legend.position = "none")
+
+diversity_libprep_plot
+```
+
+Top Viral Genera
+```{r}
+# Extract viral category data
+virus_data <- species_data_filtered %>%
+  filter(category == "viruses") %>% 
+  filter(is_phage == "false") # filter out phages as marked by CZID
+
+# Add genus columns to the dataframe
+genus_data <- get_genus_info_batch(virus_data$tax_id, batch_size = 100)
+
+# Combine with original dataframe
+virus_data <- cbind(virus_data, genus_data)
+```
+
+```{r}
+# Calculate mean nt_rpm for each taxon across samples
+genus_summary <- virus_data %>%
+  group_by(genus_name, library_prep) %>%
+  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus","Alphapapillomavirus","Nicoomyvirus")) %>% # filter out known phages
+  filter(genus_tax_id != -200) %>% 
+  summarize(mean_nt_rpm = mean(nt_rpm, na.rm = TRUE),
+            total_reads = sum(nt_count, na.rm = TRUE),
+            .groups = "drop") %>%
+  na.omit() %>% 
+  arrange(desc(mean_nt_rpm))
+
+# Select top 10 genus names by mean nt_rpm
+top_genus_names <- genus_summary %>%
+  group_by(genus_name, library_prep) %>%
+  summarize(mean_rpm = mean_nt_rpm, .groups = "drop") %>%
+  arrange(desc(mean_rpm)) %>%
+  slice_head(n = 20) %>%
+  pull(genus_name)
+
+# Filter data for top taxa
+top_genus_data <- virus_data %>%
+  filter(genus_name %in% top_genus_names)
+  #na.omit()
+
+# Create overall table with Top Viral Genera
+top_genus_summary = top_genus_data %>% 
+  drop_na(genus_name) %>% 
+  group_by(genus_name) %>% 
+  summarise(mean_rpm = mean(nt_rpm), .groups = "drop")
+  #slice_head(n=20)
+
+# get frequency of each genus
+genus_counts <- virus_data_clean %>%
+  drop_na(genus_name) %>% 
+  count(genus_name, sort = TRUE) %>%
+  mutate(genus_name = fct_reorder(genus_name, n))
+
+# get proportion of time genus is detected in each sample
+virus_sample_per = virus_data_clean %>% 
+  drop_na(genus_name) %>% 
+  group_by(genus_name) %>% 
+  summarize(
+    perc_of_samples = n_distinct(sample_name) / n_distinct(.$sample_name)
+    ) %>% 
+  arrange(desc(perc_of_samples))
+
+# join back to overall table
+top_genus_summary = top_genus_summary %>% 
+  left_join(genus_counts, by = "genus_name") %>% 
+  left_join(virus_sample_per, by = "genus_name")
+
+top_genus_summary %>% arrange(desc(perc_of_samples))
+```
+
+```{r}
+#4 Create a boxplot for the top 10 taxa, grouped by control status
+genus_boxplot <- ggplot(top_genus_data, aes(x = genus_name, y = nt_rpm, fill = library_prep)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+    scale_fill_brewer(palette = "Paired") +
+    labs(title = "Top Viral Genera Identified in Slurry",
+         x = "Viral Genus",
+         y = "RPM (nt)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+genus_boxplot
+```
+
+Virus Overview
+```{r}
+# further filter out phages
+virus_data_clean = virus_data %>% 
+  filter(!str_detect(name, "phage")) %>% # more phage filtering
+  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus","Alphapapillomavirus","Nicoomyvirus")) %>% # filter out known phages
+  filter(genus_tax_id != -200)
+
+# get all unique non phage virus genera across all samples
+dim(table(virus_data_clean$genus_name))
+
+# get all unique non phage virus species across all samples
+dim(table(virus_data_clean$name))
+```
+
+Charting the Viral Community
+```{r}
+library(forcats)
+library(RColorBrewer)
+library(viridis)
+library(scales)
+library(ggtext)
+library(treemap)
+library(treemapify)
+```
+
+```{r}
+# Count occurrences of each genus (or use your abundance measure)
+genus_counts <- virus_data_clean %>%
+  drop_na(genus_name) %>% 
+  count(genus_name, sort = TRUE) %>%
+  mutate(genus_name = fct_reorder(genus_name, n))
+
+# For top N genera (adjust N as needed)
+top_genera <- genus_counts %>%
+  slice_head(n = 20)  # Show top 20 genera
+
+# Highest Percent of Samples with Viral Genus
+top_genera_treemap <- ggplot(top_genus_summary, aes(area = perc_of_samples, fill = perc_of_samples, label = genus_name)) +
+  geom_treemap(alpha = 0.8, color = "white", size = 1) +
+  geom_treemap_text(color = "white", place = "centre", size = 10, 
+                    family = "Arial", fontface = "bold") +
+  scale_fill_viridis_c(name = "Proportion (%)", option = "turbo", direction = 1) +
+  labs(
+    title = "Highest proportion of samples with viral genera",
+    caption = "Proportion of samples shown by area size and color"
+  ) +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 1),
+    legend.position = "right",
+    plot.margin = margin(20, 20, 20, 20)
+  )
+top_genera_treemap
+
+# Relative Abundance
+top_genera_lollipop <- ggplot(top_genus_summary, aes(x = mean_rpm, y = genus_name)) +
+  geom_segment(aes(x = 0, xend = mean_rpm, y = genus_name, yend = genus_name), 
+               color = "gray70", size = 0.5) +
+  geom_point(aes(color = mean_rpm), size = 3, alpha = 0.8) +
+  scale_color_viridis_c(name = "Count", option = "turbo", direction = 1) +
+  scale_x_continuous(expand = c(0, 0), labels = comma_format()) +
+  labs(
+    title = "Viral genus with highest relative abundance",
+    x = "Relative Abundance (%)",
+    y = "Viral Genus"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 1),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10, face = "italic"),
+    axis.text.x = element_text(size = 10),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+top_genera_lollipop
+
+# Highest total number of detections across all samples
+top_detections_lollipop <- ggplot(top_genus_summary, aes(x = n, y = genus_name)) +
+  geom_segment(aes(x = 0, xend = n, y = genus_name, yend = genus_name), 
+               color = "gray70", size = 0.5) +
+  geom_point(aes(color = n), size = 3, alpha = 0.8) +
+  scale_color_viridis_c(name = "Count", option = "turbo", direction = 1) +
+  scale_x_continuous(expand = c(0, 0), labels = comma_format()) +
+  labs(
+    title = "Highest total number of detections across all samples",
+    x = "Frequency of Genus",
+    y = "Viral Genus"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 1),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10, face = "italic"),
+    axis.text.x = element_text(size = 10),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+top_detections_lollipop
+```
+
+
+```{r}
+# Summarize at different taxonomic levels for each sample
+phylum_composition_samples <- taxa_table %>%
+  group_by(category, base_sample) %>%
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  group_by(base_sample) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Visualize composition by sample
+tax_comp_plot = ggplot(phylum_composition_samples, aes(x = base_sample, y = relative_abundance, fill = category)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Taxonomic Composition across All Samples",
+       x = "Sample", 
+       y = "Relative Abundance (%)",
+       fill = "Taxonomic Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+tax_comp_plot
+
+```

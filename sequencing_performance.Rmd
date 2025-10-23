@@ -1,0 +1,229 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(phyloseq)
+library(microbiome)
+library(tidyverse)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+```
+
+Sequencing Summary Metrics
+```{r}
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/ghost-output/sequencing_summary_metrics.csv", stringsAsFactors = FALSE)
+
+seq_metrics %>% 
+  group_by(water_control) %>% 
+  summarize(Mean_reads = mean(passed_filters, na.rm = TRUE))
+    
+```
+
+
+Sample Taxon Reports
+```{r}
+# Function to read and process a single CSV file
+process_csv_file <- function(file_path) {
+  # Extract sample name from file name
+  sample_name <- gsub(".csv$", "", basename(file_path))
+  
+  # Read the CSV file
+  data <- read.csv(file_path, stringsAsFactors = FALSE)
+  
+  # Add sample name column
+  data$sample_name <- sample_name
+  
+  return(data)
+}
+
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# Create a metadata dataframe to merge with taxon data
+sample_metadata <- data.frame(
+  sample_name = c("S2", "S2_M", "S4", "S4_M","S5", "S5_M", "S5_2", 
+                  "S5_2_M", "S6", "S6_M", "S7", "S7_M", "S8", "S8_M", 
+                  "S9", "S9_M", "S10", "S10_M", "PC1", "PC1_M", "PC2",
+                  "PC2_M", "PC3", "PC3_M", "PC4", "PC4_M"),
+  base_sample = c("s2","s2","s4","s4","s5","s5","s5-2","s5-2",
+                  "s6","s6","s7","s7","s8","s8","s9","s9","s10","s10",
+                  "pc1","pc1","pc2","pc2","pc3","pc3","pc4","pc4"),
+  library_prep = c("NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE"),
+  stringsAsFactors = FALSE
+)
+
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+```
+
+```{r}
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1)
+
+species_data_filtered = species_data %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50) %>% 
+  filter(!is.na(base_sample)) %>%   # filter out Negative Controls
+  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+
+```
+
+
+```{r}
+seq_metrics_tbl = seq_metrics %>% 
+  left_join(sample_metadata, by = "sample_name") %>% 
+  filter(!base_sample %in% c("s5-2")) %>% 
+  mutate(
+    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+  )
+
+seq_metrics_summary = seq_metrics_tbl %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters),
+    names_glue = "{.value}_{library_prep}"
+  ) 
+seq_metrics_summary
+```
+
+
+```{r}
+# Calculate total reads per sample for percentage calculations
+sample_totals <- species_data %>%
+  group_by(sample_name, base_sample, library_prep) %>%
+  summarise(
+    total_nt_count = sum(nt_count, na.rm = TRUE),
+    total_nr_count = sum(nr_count, na.rm = TRUE),
+    total_nt_rpm = sum(nt_rpm, na.rm = TRUE),
+    total_nr_rpm = sum(nr_rpm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Extract viral category data
+virus_data <- species_data %>%
+  filter(category == "viruses") %>% 
+  filter(is_phage == "false") # filter out phages
+
+# Calculate percentage of viral reads per sample
+viral_percentages <- virus_data %>%
+  drop_na(base_sample) %>% 
+  group_by(sample_name, base_sample, library_prep) %>%
+  summarise(
+    viral_nt_count = sum(nt_count, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sample_totals, by = c("base_sample","library_prep")) %>%
+  mutate(
+    viral_nt_percent = (viral_nt_count / total_nt_count) * 100,
+    # Replace NaN and Inf with NA
+    viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent))
+
+viral_summary = viral_percentages %>% 
+  select(base_sample, library_prep, viral_nt_count, viral_nt_percent) %>% 
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(viral_nt_count, viral_nt_percent),
+    names_glue = "{.value}_{library_prep}"
+  )
+
+# join viral calculations to summary table
+seq_metrics_summary = seq_metrics_summary %>% 
+  left_join(viral_summary, by = "base_sample","library_prep")
+seq_metrics_summary
+
+
+# Make table pretty
+seq_metrics_summary %>%
+  kable(
+    format = "html",  # or "latex" if using LaTeX
+    caption = "Overall sequencince performance comparison between mNGS and MSSPE"
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+
+```
+
+```{r}
+# Wilcoxon signed rank test to measure differences between library preps
+
+
+```
+
+
+```{r}
+seq_metrics_tbl = seq_metrics_tbl %>% 
+  drop_na(library_prep)
+
+seq_metrics_tbl %>% 
+    group_by(library_prep) %>%
+    summarize(mean_reads = mean(total_reads), mean_reads_sub = median(total_reads_sub))
+
+seq_metrics_tbl_long <- seq_metrics_tbl %>%
+  pivot_longer(
+    cols = c(total_reads, total_reads_sub, passed_filters),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(metric = factor(metric, levels = c("total_reads", "total_reads_sub", "passed_filters")))
+
+ggplot(seq_metrics_tbl_long, aes(x = library_prep, y = value, fill = metric)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_brewer(palette = "Set2", name = "Metric") +
+  labs(
+    title = "Overall Sequencing Performance by Library Prep",
+    x = "",
+    y = "Read Count"
+  ) +
+  theme_minimal()
+  
+```
+
+```{r}
+# Create boxplot for viral NT percentage by control status
+mean_df <- viral_percentages %>%
+  group_by(library_prep) %>%
+  summarise(mean_value = mean(viral_nt_percent, na.rm = TRUE))
+
+viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt_percent, fill = library_prep)) +
+  geom_boxplot() +
+  stat_summary(fun = median, geom = "text", aes(label = round(..y.., 1)),
+               vjust = -0.5, color = "black", fontface = "bold", size = 3) +
+  geom_segment(data = mean_df,
+               aes(x = as.numeric(library_prep) - 0.3,
+                   xend = as.numeric(library_prep) + 0.3,
+                   y = mean_value, yend = mean_value),
+               linetype = "dotted", color = "black") +
+  geom_text(data = mean_df,
+            aes(x = library_prep, y = mean_value, label = paste0("μ: ", round(mean_value, 1))),
+            vjust = -1, color = "black", size = 3.2) +
+  theme_bw() +
+  labs(
+    title = "Percentage(%) Viral Reads",
+    x = "",
+    y = "% Viral Reads",
+    fill = "Library Prep"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+viral_nt_boxplot
+```
+
+

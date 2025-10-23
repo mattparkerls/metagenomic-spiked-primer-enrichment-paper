@@ -1,0 +1,91 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# Install dependency once if needed
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if (!requireNamespace("Biostrings", quietly = TRUE))
+  BiocManager::install("Biostrings")
+
+library(Biostrings)
+```
+
+```{r}
+# --- INPUT FILES ---
+primer_csv = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/iav_primers.csv"
+fasta_file = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/iav_reads.fasta"
+
+# --- PARAMETERS ---
+primer_len <- 15
+primer_match_min <- 12          # minimum bases matching to count as partial
+max_mismatch <- primer_len - primer_match_min  # allows up to 3 mismatches
+five_prime_threshold <- 20                     # bp window defining "5' end"
+
+# --- LOAD DATA ---
+primers <- read.csv(primer_csv, stringsAsFactors = FALSE)
+primer_seqs <- DNAStringSet(primers$sequence)
+reads <- readDNAStringSet(fasta_file, format = "fasta")
+read_ids <- names(reads)
+
+# --- FUNCTION ---
+find_primer_hits <- function(reads, primer, max_mismatch, five_prime_threshold) {
+  rc_primer <- reverseComplement(primer)
+
+  all_hits <- list()
+
+  # Search both strands
+  for (strand in c("forward", "reverse")) {
+    pattern <- if (strand == "forward") primer else rc_primer
+    hits <- vmatchPattern(pattern = pattern, subject = reads,
+                          max.mismatch = max_mismatch, fixed = FALSE)
+
+    # Collect hit info
+    if (any(lengths(hits) > 0)) {
+      hit_df <- do.call(rbind, lapply(seq_along(hits), function(i) {
+        if (length(hits[[i]]) == 0) return(NULL)
+        data.frame(
+          read_id = read_ids[i],
+          start = start(hits[[i]]),
+          width = width(hits[[i]]),
+          strand = strand,
+          stringsAsFactors = FALSE
+        )
+      }))
+      all_hits[[strand]] <- hit_df
+    }
+  }
+
+  if (length(all_hits) == 0) return(NULL)
+
+  hits_df <- do.call(rbind, all_hits)
+  hits_df$primer <- as.character(primer)
+  hits_df$match_type <- ifelse(hits_df$width == primer_len, "whole", "partial")
+  hits_df$five_prime_end <- hits_df$start <= five_prime_threshold
+  hits_df
+}
+
+# --- APPLY TO ALL PRIMERS ---
+all_hits <- do.call(rbind, lapply(primer_seqs, find_primer_hits,
+                                  reads = reads,
+                                  max_mismatch = max_mismatch,
+                                  five_prime_threshold = five_prime_threshold))
+
+# --- SUMMARIZE ---
+if (!is.null(all_hits)) {
+  summary_tbl <- aggregate(read_id ~ primer + strand + match_type + five_prime_end,
+                           data = all_hits, FUN = length)
+  names(summary_tbl)[5] <- "n_reads"
+  summary_tbl$total_reads <- length(reads)
+  summary_tbl$percent_reads <- round(100 * summary_tbl$n_reads / length(reads), 3)
+  
+  # Optional: write detailed hits to file
+  write.csv(all_hits, "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/iav_primer_read_hits.csv", row.names = FALSE)
+} else {
+  message("No primer matches found in reads.")
+}
+
+```
+

@@ -1,0 +1,95 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+# Positive Detections via Ghost
+pos_data = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/ghost-output/known_pathogen_asset.csv", stringsAsFactors = FALSE)
+
+pos_data %>%
+  group_by(name) %>% 
+  filter(known_pathogen == 0) %>% # not flagged by CZID
+  count()
+```
+
+```{r}
+path_data = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/ghost-output/known_pathogen_asset.csv", stringsAsFactors = FALSE)
+
+controls = c("PC1","PC3","NC")
+
+path_data = path_data %>%
+  mutate(library_prep = ifelse(str_detect(sample_name, "M"), "MSSPE", "NGS")) %>% 
+  #filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  #filter(nt_alignment_length > 50) %>% 
+  filter(!str_detect(sample_name, regex(paste(controls, collapse = "|"), ignore_case = TRUE))) # filter out controls
+
+# how many unique pathogens did we detect
+ngs_paths = path_data %>% 
+  filter(library_prep == "NGS") %>% 
+  pull(name) %>% 
+  table() %>% 
+  dim()
+ngs_paths
+
+msspe_paths = path_data %>% 
+  filter(library_prep == "MSSPE") %>% 
+  pull(name) %>% 
+  table() %>% 
+  dim()
+msspe_paths
+```
+
+Phylogenetic Analysis
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("ggtree")
+
+library(ape)
+library(ggtree)
+
+# Read the Newick file
+tree <- read.tree("/Users/mattparker/Documents/MOOPS/Phylo/seav_vp2_tree.newick")
+
+# Create automatic clades based on tree structure
+tree_grouped <- groupClade(tree, .node=c(getMRCA(tree, 1:ceiling(Ntip(tree)/3)), 
+                                         getMRCA(tree, ceiling(Ntip(tree)/3):ceiling(2*Ntip(tree)/3))))
+
+# Define a beautiful color palette for clades
+clade_colors <- c("0" = "#2E86AB",     # Blue
+                  "1" = "#A23B72",     # Pink/Purple  
+                  "2" = "#F18F01",     # Orange
+                  "3" = "#C73E1D",     # Red
+                  "4" = "#6A994E",     # Green
+                  "5" = "#7209B7")     # Purple
+
+# Create beautiful publication-ready tree with colored clades
+p <- ggtree(tree_grouped, aes(color=group), size=1.2) + 
+  scale_color_manual(values=clade_colors, guide="none") +
+  geom_tiplab(size=3.5, fontface="italic", hjust=-0.05, color="black") +
+  geom_nodelab(size=2.5, hjust=1.1, vjust=-0.3, color="gray30", alpha=0.7) +
+  geom_treescale(x=0, y=0, width=0.1, color="black", fontsize=3.5) +
+  theme_tree2(bgcolor="white") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color="black", size=0.5),
+        axis.text = element_text(size=11),
+        axis.title = element_text(size=13, face="bold"),
+        plot.title = element_text(size=16, face="bold", hjust=0.5),
+        plot.subtitle = element_text(size=12, hjust=0.5, color="gray40")) +
+  xlim(0, max(node.depth.edgelength(tree)) * 1.4) +
+  labs(title="Seadornavirus", 
+       subtitle="Amino acid identity for VP2")
+
+p
+```
+
