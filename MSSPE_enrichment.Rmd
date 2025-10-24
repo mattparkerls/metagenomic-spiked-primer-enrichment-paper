@@ -17,20 +17,6 @@ source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 ```
 
 ```{r}
-# Function to read and process a single CSV file
-process_csv_file <- function(file_path) {
-  # Extract sample name from file name
-  sample_name <- gsub(".csv$", "", basename(file_path))
-  
-  # Read the CSV file
-  data <- read.csv(file_path, stringsAsFactors = FALSE)
-  
-  # Add sample name column
-  data$sample_name <- sample_name
-  
-  return(data)
-}
-
 # List all CSV files in the directory
 csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
 

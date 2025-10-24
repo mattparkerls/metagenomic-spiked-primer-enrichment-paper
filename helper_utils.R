@@ -104,3 +104,77 @@ get_genus_info_batch <- function(tax_ids, batch_size = 50) {
   
   return(result)
 }
+
+# Function to read and process a single CSV file
+process_csv_file <- function(file_path) {
+  # Extract sample name from file name
+  sample_name <- gsub(".csv$", "", basename(file_path))
+  
+  # Read the CSV file
+  data <- read.csv(file_path, stringsAsFactors = FALSE)
+  
+  # Add sample name column
+  data$sample_name <- sample_name
+  
+  return(data)
+}
+
+# ---- DOWNSAMPLING SIMULATION ----
+simulate_downsampling <- function(count_mat, depths, n_reps, targets, detection_thresholds) {
+    taxa <- rownames(count_mat)
+    samples <- colnames(count_mat)
+    
+    results <- list()
+    
+    for (depth in depths) {
+      for (rep in seq_len(n_reps)) {
+        # Rarefy each sample using vegan::rrarefy
+        rarefied_list <- lapply(samples, function(s) {
+          x <- count_mat[, s]
+          total_reads <- sum(x, na.rm = TRUE)
+          if (total_reads == 0) return(rep(0, length(x)))
+          as.numeric(rrarefy(matrix(x, nrow = 1), sample = min(depth, total_reads)))
+        })
+        
+        # Combine into matrix
+        rarefied <- do.call(cbind, rarefied_list)
+        colnames(rarefied) <- samples
+        rownames(rarefied) <- taxa
+        
+        # Diversity metrics
+        richness <- apply(rarefied, 2, function(x) sum(x > 0))
+        shannon  <- apply(rarefied, 2, function(x) vegan::diversity(x, index = "shannon"))
+        
+        sim_df <- tibble(
+          sample = samples,
+          depth = depth,
+          rep = rep,
+          richness = as.numeric(richness),
+          shannon = as.numeric(shannon)
+        )
+        
+        # Join library prep info to simulated results
+        sim_df <- sim_df %>%
+          left_join(sample_meta, by = c("sample" = "sample_name"))
+        
+        # --- Pathogen detection ---
+        if (length(targets) > 0) {
+          for (th in detection_thresholds) {
+            for (t in targets) {
+              col_name <- paste0("detect_", t, "_ge_", th)
+              if (t %in% taxa) {
+                reads <- rarefied[t, ]
+                sim_df[[col_name]] <- as.numeric(reads >= th)
+              } else {
+                sim_df[[col_name]] <- NA_real_
+              }
+            }
+          }
+        }
+        
+        results[[length(results) + 1]] <- sim_df
+      }
+    }
+    
+    bind_rows(results)
+  }

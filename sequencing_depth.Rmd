@@ -10,6 +10,51 @@ library(tidyr)
 library(purrr)
 library(ggplot2)
 library(vegan)
+library(lme4)
+library(stringr)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+```
+
+Sample Taxon Reports
+```{r}
+
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# Create a metadata dataframe to merge with taxon data
+sample_metadata <- data.frame(
+  sample_name = c("S2", "S2_M", "S4", "S4_M","S5", "S5_M", "S5_2", 
+                  "S5_2_M", "S6", "S6_M", "S7", "S7_M", "S8", "S8_M", 
+                  "S9", "S9_M", "S10", "S10_M", "PC1", "PC1_M", "PC2",
+                  "PC2_M", "PC3", "PC3_M", "PC4", "PC4_M"),
+  base_sample = c("s2","s2","s4","s4","s5","s5","s5-2","s5-2",
+                  "s6","s6","s7","s7","s8","s8","s9","s9","s10","s10",
+                  "pc1","pc1","pc2","pc2","pc3","pc3","pc4","pc4"),
+  library_prep = c("NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
+                   "MSSPE","NGS","MSSPE"),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1)
+
+species_data_filtered = species_data %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50) %>% 
+  filter(!is.na(base_sample)) %>%   # filter out Negative Controls
+  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
 ```
 
 ```{r}
@@ -17,78 +62,26 @@ library(vegan)
 depths <- c(1e5, 5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6, 9e6, 10e6)     # Target depths to simulate
 n_reps <- 30                        # Replicates per depth
 target_taxa <- c("Alphapapillomavirus 7", "Rotavirus C", "Teschovirus A", "Sapporo virus")  # pathogens to track
-detection_thresholds <- c(1, 5, 10)  # read thresholds
+detection_thresholds <- c(1, 5)  # read thresholds
 ```
 
 ```{r}
-# Sanity check
-#stopifnot(all(c("sample_name", "taxid", "tax_name", "read_count") %in% names(data)))
+# Extract sample metadata (one row per sample)
+sample_meta <- species_data_filtered %>%
+  select(sample_name, library_prep) %>%
+  distinct()
 
 # Create wide count matrix: taxa x samples
-count_mat <- species_data %>%
+count_mat <- species_data_filtered %>%
   group_by(sample_name, name) %>%
   summarise(reads = sum(nt_count, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(names_from = sample_name, values_from = reads, values_fill = 0)
+  pivot_wider(names_from = sample_name, values_from = reads, values_fill = 0) %>% 
+  column_to_rownames("name")
 
 taxa <- count_mat$name
 count_mat <- as.data.frame(count_mat)
 rownames(count_mat) <- taxa
 count_mat <- count_mat[ , -1]  # remove tax_name column
-```
-
-
-```{r}
-# ---- DOWNSAMPLING SIMULATION ----
-simulate_downsampling <- function(count_mat, depths, n_reps, targets, detection_thresholds) {
-  taxa <- rownames(count_mat)
-  samples <- colnames(count_mat)
-  
-  results <- list()
-  for (depth in depths) {
-    for (rep in seq_len(n_reps)) {
-      # For each sample, simulate multinomial sampling
-      sim_counts <- sapply(samples, function(s) {
-        x <- count_mat[[s]]
-        total_reads <- sum(x)
-        if (total_reads == 0) return(rep(0, length(x)))
-        p <- x / total_reads
-        n_draw <- min(depth, total_reads)
-        as.numeric(rmultinom(1, size = n_draw, prob = p))
-      })
-      rownames(sim_counts) <- taxa
-
-    # Diversity metrics (ensure they are numeric vectors, not matrices)
-    richness <- as.numeric(apply(sim_counts, 2, function(x) sum(x > 0)))
-    shannon  <- as.numeric(apply(sim_counts, 2, function(x) vegan::diversity(x, index = "shannon")))
-    
-    sim_df <- tibble::tibble(
-      sample = samples,
-      depth = depth,
-      rep = rep,
-      richness = richness,
-      shannon = shannon
-    )
-
-      # Pathogen detection
-      if (length(targets) > 0) {
-        for (th in detection_thresholds) {
-          for (t in targets) {
-            if (t %in% taxa) {
-              reads <- sim_counts[t, ]
-              sim_df[[paste0("detect_", t, "_ge_", th)]] <- as.numeric(reads >= th)
-            } else {
-              sim_df[[paste0("detect_", t, "_ge_", th)]] <- NA_real_
-            }
-          }
-        }
-      }
-
-      results[[length(results) + 1]] <- sim_df
-    }
-  }
-  bind_rows(results)
-}
-
 ```
 
 ```{r}
@@ -107,8 +100,70 @@ div_summary <- res %>%
     shannon_mean = mean(shannon),
     shannon_sd = sd(shannon),
     .groups = "drop"
+  ) 
+
+# By library prep
+div_summary_libprep <- res %>%
+  group_by(depth, library_prep) %>%
+  summarise(
+    richness_mean = mean(richness),
+    richness_sd = sd(richness),
+    shannon_mean = mean(shannon),
+    shannon_sd = sd(shannon),
+    .groups = "drop"
+  ) 
+
+# remove _M from samples names for comparison
+res = res %>% 
+  mutate(sample = str_remove(sample, "_M.*$"))
+
+res_agg <- res %>%
+  rename(richness_val = richness) %>% 
+  group_by(sample, library_prep, depth) %>%
+  summarise(
+    richness_mean = mean(richness_val),
+    shannon_mean = mean(shannon),
+    .groups = "drop"
   )
 
+# do friedman test measuring richness by library prep pairing by sample
+friedman_results <- res_agg %>%
+  group_by(depth) %>%
+  summarise(
+    test = list(
+      friedman.test(richness_mean ~ library_prep | sample)
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    statistic = map_dbl(test, ~ .$statistic),
+    p_value   = map_dbl(test, ~ .$p.value)
+  )
+
+# Join friedman results back to the overall table
+div_summary = div_summary %>% 
+  left_join(friedman_results, by = "depth")
+
+div_summary = div_summary %>% 
+  select(-shannon_sd, -richness_sd, -test, -statistic)
+
+div_summary
+```
+
+
+```{r}
+# Plot Rarefaction Curve
+p1 <- ggplot(div_summary_libprep, aes(x = depth/1e6, y = richness_mean, fill = library_prep, color = library_prep)) +
+  geom_line(aes(y = richness_mean)) +
+  geom_point(aes(y = richness_mean)) +
+  #geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd), alpha = 0.2) +
+  labs(x = "Sequencing depth (million reads)", y = "Species richness",
+       title = "Overall diversity vs sequencing depth") +
+  theme_bw()
+p1
+```
+
+```{r}
 # Detection summary
 det_cols <- grep("^detect_", names(res), value = TRUE)
 det_summary <- res %>%
@@ -120,20 +175,17 @@ det_summary <- res %>%
     target = sub("_ge_.*", "", target),
     threshold = sub(".*_ge_", "", target_thresh)
   )
+
+det_summary %>% 
+  group_by(depth, target) %>% 
+  summarise(
+    mean_prob = mean(detect_prob),
+    .groups = "drop"
+  ) %>% 
+  pivot_wider(names_from = target, values_from = mean_prob)
+
 ```
 
-```{r}
-# Plot Rarefaction Curve
-p1 <- ggplot(div_summary, aes(x = depth/1e6, y = richness_mean)) +
-  geom_line(aes(y = richness_mean), color = "steelblue") +
-  geom_point(aes(y = richness_mean), color = "steelblue") +
-  geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd),
-              fill = "steelblue", alpha = 0.2) +
-  labs(x = "Sequencing depth (million reads)", y = "Species richness",
-       title = "Overall diversity vs sequencing depth") +
-  theme_bw()
-p1
-```
 
 ```{r}
 # Plot Target Curve
@@ -146,28 +198,5 @@ p2 <- ggplot(det_summary, aes(x = depth/1e6, y = detect_prob, color = target)) +
 
 p2
 ```
-```{r}
-# Find the depth (per target + threshold) with the highest detection probability
-best_depths <- det_summary %>%
-  group_by(target, threshold) %>%
-  filter(detect_prob >= 0.95 * max(detect_prob, na.rm = TRUE)) %>%
-  slice_min(order_by = depth, n = 1)
 
-# Add annotation labels
-p3 <- ggplot(det_summary, aes(x = depth/1e6, y = detect_prob, color = target)) +
-  geom_line() + geom_point() +
-  facet_wrap(~threshold, labeller = labeller(threshold = function(x) paste("≥", x, "reads"))) +
-  geom_vline(data = best_depths, aes(xintercept = depth/1e6, color = target),
-             linetype = "dashed", alpha = 0.5) +
-  geom_text(
-    data = best_depths,
-    aes(x = depth/1e6, y = detect_prob, label = paste0(depth/1e6, "M")),
-    vjust = -0.8, size = 3, show.legend = FALSE
-  ) +
-  labs(x = "Depth (million reads)", y = "Detection probability",
-       title = "Target pathogen detection vs sequencing depth") +
-  theme_bw()
-
-p3
-```
 
