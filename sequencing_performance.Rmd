@@ -10,12 +10,13 @@ library(tidyverse)
 library(ggpubr)
 library(knitr)
 library(kableExtra)
+library(stringr)
 source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 ```
 
 Sequencing Summary Metrics
 ```{r}
-seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/ghost-output/sequencing_summary_metrics.csv", stringsAsFactors = FALSE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
 
 seq_metrics %>% 
   group_by(water_control) %>% 
@@ -28,26 +29,42 @@ Sample Taxon Reports
 ```{r}
 
 # List all CSV files in the directory
-csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
 
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
 # Create a metadata dataframe to merge with taxon data
-sample_metadata <- data.frame(
-  sample_name = c("S2", "S2_M", "S4", "S4_M","S5", "S5_M", "S5_2", 
-                  "S5_2_M", "S6", "S6_M", "S7", "S7_M", "S8", "S8_M", 
-                  "S9", "S9_M", "S10", "S10_M", "PC1", "PC1_M", "PC2",
-                  "PC2_M", "PC3", "PC3_M", "PC4", "PC4_M"),
-  base_sample = c("s2","s2","s4","s4","s5","s5","s5-2","s5-2",
-                  "s6","s6","s7","s7","s8","s8","s9","s9","s10","s10",
-                  "pc1","pc1","pc2","pc2","pc3","pc3","pc4","pc4"),
-  library_prep = c("NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE"),
-  stringsAsFactors = FALSE
-)
+sample_metadata = seq_metrics %>% 
+  select(sample_name) %>% 
+  mutate(
+  # Library prep: MSSPE if ends with "_M"
+  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+
+  # Remove the _M suffix to get the core sample identifier
+  core = str_remove(sample_name, "_M$"),
+  # Detect experiment 3 first (Cxxx_LPx)
+  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+
+  # Base: first sample ID (e.g. S10, PC1)
+  base = str_extract(core, "^[A-Za-z]+\\d+"),
+
+  # Append -2 or -3 only if not exp3
+  suffix = case_when(
+    !is_exp3 & str_detect(core, "_2$") ~ "-2",
+    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    TRUE ~ ""
+  ),
+
+  base_sample = tolower(paste0(base, suffix)),
+
+  experiment = case_when(
+    is_exp3 ~ 3,
+    str_detect(core, "_3$") ~ 2,
+    TRUE ~ 1
+  )
+) %>%
+select(sample_name, base_sample, library_prep, experiment)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
@@ -71,7 +88,7 @@ species_data_filtered = species_data %>%
 ```{r}
 seq_metrics_tbl = seq_metrics %>% 
   left_join(sample_metadata, by = "sample_name") %>% 
-  filter(!base_sample %in% c("s5-2")) %>% 
+  filter(!sample_name %in% c("s5-2")) %>% 
   mutate(
     total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
   )

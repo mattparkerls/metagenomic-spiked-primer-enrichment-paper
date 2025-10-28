@@ -18,127 +18,146 @@ source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 
 ```{r}
 # List all CSV files in the directory
-csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/old_samples/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
 
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
 # Create a metadata dataframe to merge with taxon data
-sample_metadata <- data.frame(
-  sample_name = c("S2", "S2_M", "S4", "S4_M","S5", "S5_M", "S5_2", 
-                  "S5_2_M", "S6", "S6_M", "S7", "S7_M", "S8", "S8_M", 
-                  "S9", "S9_M", "S10", "S10_M", "PC1", "PC1_M", "PC2",
-                  "PC2_M", "PC3", "PC3_M", "PC4", "PC4_M"),
-  base_sample = c("s2","s2","s4","s4","s5","s5","s5-2","s5-2",
-                  "s6","s6","s7","s7","s8","s8","s9","s9","s10","s10",
-                  "pc1","pc1","pc2","pc2","pc3","pc3","pc4","pc4"),
-  library_prep = c("NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE","NGS","MSSPE","NGS","MSSPE","NGS",
-                   "MSSPE","NGS","MSSPE"),
-  stringsAsFactors = FALSE
-)
+sample_metadata = seq_metrics %>% 
+  select(sample_name, water_control, infection_class) %>% 
+  mutate(
+  # Library prep: MSSPE if ends with "_M"
+  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+
+  # Remove the _M suffix to get the core sample identifier
+  core = str_remove(sample_name, "_M$"),
+  # Detect experiment 3 first (Cxxx_LPx)
+  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+
+  # Base: first sample ID (e.g. S10, PC1)
+  base = str_extract(core, "^[A-Za-z]+\\d+"),
+
+  # Append -2 or -3 only if not exp3
+  suffix = case_when(
+    !is_exp3 & str_detect(core, "_2$") ~ "-2",
+    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    TRUE ~ ""
+  ),
+
+  base_sample = tolower(paste0(base, suffix)),
+
+  experiment = case_when(
+    is_exp3 ~ 3,
+    str_detect(core, "_3$") ~ 2,
+    TRUE ~ 1
+  )
+) %>%
+select(sample_name, base_sample, library_prep, experiment, water_control, infection_class)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
+# get hpv data from experiment 1 & 2
+hpv_data = merged_data %>% 
+  filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE))) %>% 
+  filter(experiment == 1 | experiment == 2)
+
+# remove MSSPE libraries that are also experiment 1 (after we have already pulled the hpv rows)
+#merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
+
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
-  filter(tax_level == 1)
+  filter(tax_level == 1) %>% 
+  filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+
+# add hpv data to the rest of the data
+all_data_species = all_data_species %>% 
+  add_row(hpv_data)
 ```
 
-```{r}
-# Positive Control HPV18 Paired Per Sample Enrichment (Fold Change)
-pc_data = all_data_species %>% 
-  filter(base_sample %in% c("pc1","pc2","pc3","pc4"))
-
-eps <- 0.1
-
-hpv_data = pc_data %>% 
-  filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE))) %>% 
-  group_by(base_sample, library_prep) %>% 
-  summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
-  pivot_wider(
-    names_from = library_prep,
-    values_from = rpm_mean
-  ) %>%
-  mutate(
-    FC = (`MSSPE` + eps)/(`NGS` + eps),
-    log2FC = log2(FC)
-  )
-
-```
 
 ```{r}
-# overall mean and median fold change for HPV18
-geo_mean_FC <- 2^mean(hpv_data$log2FC, na.rm = TRUE); geo_mean_FC
-median_FC <- median(hpv_data$FC, na.rm = TRUE); median_FC
-mean_FC = mean(hpv_data$FC, na.rm = TRUE); mean_FC
+# targets to filter to the genus level
+genus_targets = c(
+  "Bocaparvovirus",
+  "Sapelovirus",
+  "Circovirus",
+  "Enterovirus",
+  "Teschovirus",
+  "Alphapapillomavirus",
+  "Sapovirus",
+  "Mamastrovirus",
+  "Kobuvirus",
+  "Asfivirus",
+  "Pestivirus",
+  "Aphthovirus",
+  "Betaarterivirus",
+  "Alphainfluenzavirus",
+  "Henipavirus")
 
-# paired differences test
-viral_target_enrichment_wilcox = wilcox.test(
-  hpv_data$NGS,
-  hpv_data$MSSPE,
-  alternative = "less",
-  paired = TRUE
-); viral_target_enrichment_wilcox
-
-# final table for each viral target
-viral_target_enrichment_summary <- tibble(
-  virus = "HPV18",
-  mean_rpm_ngs = mean(hpv_data$NGS),
-  mean_rpm_msspe = mean(hpv_data$MSSPE),
-  fold_enrichment = mean(hpv_data$FC),
-  iqr = paste0(
-    round(quantile(hpv_data$FC, 0.25, na.rm = TRUE), 1),
-    "–",
-    round(quantile(hpv_data$FC, 0.75, na.rm = TRUE), 1)
-  ),
-  statistic = viral_target_enrichment_wilcox$statistic,
-  p_value = viral_target_enrichment_wilcox$p.value,
+# assign these to group species
+name_targets = c(
+  "PBoV", # porcine bocavirus
+  "PCV", # porcine circovirus
+  "PKV", # porcine kobuvirus / aichivirus C
+  "EV-G", # porcine enterovirus G
+  "PTV", # porcine teschovirus 
+  "PAstV", # porcine astrovirus
+  "PSaV", # porcine sapovirus
+  "PSV", # porcine sapelovirus
+  "HPV18" # humanpapillomavirus 7/18
 )
 
-print(viral_target_enrichment_summary)
+# specific names that should group together
+ent_v = "Enterovirus"
+circo_v = "Circovirus"
+sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
+tes_v = "Teschovirus"
+aich_v = "Aichivirus"
+astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
+hpv18 = "Alphapapillomavirus"
+sapel_v = "Sapelovirus"
+boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
 
-# Add final summary row for totals over all targets
-
-```
-
-
-```{r}
-# Boxplot of rPM across all samples for each Target, split by library prep
-targets = c("Teschovirus","Aichi","Sapo","Sapporo","Sapelovirus","Alphapapillomavirus","enterovirus G","porcine bocavirus")
 
 all_viruses <- all_data_species %>%
   filter(category == "viruses") %>% 
-  filter(is_phage == "false") %>%  # filter out phages
-  filter(!is.na(base_sample)) %>%   # filter out Negative Controls
-  filter(name != "Marmot sapelovirus 1") %>% 
-  filter(name != "Enterovirus goat/JL14")
+  filter(is_phage == "false")  # filter out phages
 
-  # add name group 
+# add name group column
 all_viruses = all_viruses %>% 
   mutate(name_group = case_when(
-    str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE)) ~ "Alphapapillomavirus",
-    str_detect(name, regex("Aichivirus", ignore_case = TRUE)) ~ "Aichivirus",
-    str_detect(name, regex("influenzavirus", ignore_case = TRUE)) ~ "Alphainfluenzavirus",
-    str_detect(name, regex("Teschovirus", ignore_case = TRUE)) ~ "Teschovirus",
-    str_detect(name, regex("Circovirus", ignore_case = TRUE)) ~ "Circovirus",
-    str_detect(name, regex("Sapo", ignore_case = TRUE)) ~ "Sapovirus",
-    str_detect(name, regex("Sapporo", ignore_case = TRUE)) ~ "Sapovirus",
-    str_detect(name, regex("Sapelovirus A", ignore_case = TRUE)) ~ "Sapelovirus",
-    str_detect(name, regex("Sapelovirus sp", ignore_case = TRUE)) ~ "Sapelovirus",
-    str_detect(name, regex("enterovirus G", ignore_case = TRUE)) ~ "Enterovirus G",
-    str_detect(name, regex("porcine bocavirus", ignore_case = TRUE)) ~ "Porcine bocavirus", 
+    str_detect(name, regex(hpv18, ignore_case = TRUE)) ~ "HPV18",
+    str_detect(name, regex(aich_v, ignore_case = TRUE)) ~ "PKV",
+    str_detect(name, regex(tes_v, ignore_case = TRUE)) ~ "PTV",
+    str_detect(name, regex(circo_v, ignore_case = TRUE)) ~ "PCV",
+    str_detect(name, regex(sapo_v, ignore_case = TRUE)) ~ "PSaV",
+    str_detect(name, regex(sapel_v, ignore_case = TRUE)) ~ "PSV",
+    str_detect(name, regex(ent_v, ignore_case = TRUE)) ~ "EV-G",
+    str_detect(name, regex(boc_v, ignore_case = TRUE)) ~ "PBoV", 
+    str_detect(name, regex(astr_v, ignore_case = TRUE)) ~ "PAstV", 
     TRUE ~ name  # Keep original name if no pattern matches
   ))
 
+# Add genus columns to the dataframe
+#genus_data <- get_genus_info_batch(all_viruses$tax_id, batch_size = 100)
+
+# Combine with original dataframe
+#all_viruses <- cbind(all_viruses, genus_data)
+
+# for 0 rpm values
 eps <- 0.1
 
+# filter to only the target viral species or genus
 only_viral_targets = all_viruses %>% 
+  #filter(!genus_name %in% c("Asfivirus","Pestivirus","Alphapapillomavirus")) %>% # filtering out these genus for now
   group_by(base_sample, library_prep, name_group) %>% 
-  filter(str_detect(name, regex(paste(targets, collapse = "|"), ignore_case = TRUE))) %>% # filter to targeted viruses
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
   summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
   pivot_wider(
     names_from = library_prep,
@@ -149,11 +168,19 @@ only_viral_targets = all_viruses %>%
     log2FC = log2(mean_rpm_enrichment)
   )
 
+# calculate mean so we can add to the boxplot
+mean_df <- only_viral_targets %>%
+  group_by(name_group) %>%
+  summarise(mean_value = mean(mean_rpm_enrichment, na.rm = TRUE))
+
 # plot fold change across all samples
 alltarget_boxplot = ggplot(only_viral_targets, aes(x = name_group, y = mean_rpm_enrichment, fill = name_group)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.6) +
   geom_jitter(width = 0.2, size = 2, alpha = 0.8) +
   geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(data = mean_df,
+            aes(x = name_group, y = mean_value, label = paste0("μ: ", round(mean_value, 1))),
+            vjust = -1, color = "black", size = 3.2) +
   labs(
     title = "Viral Enrichment - All Samples",
     x = "Virus",
@@ -167,19 +194,51 @@ alltarget_boxplot = ggplot(only_viral_targets, aes(x = name_group, y = mean_rpm_
 
 alltarget_boxplot
 ```
+
+```{r}
+# final table for each viral target
+viral_target_enrichment_summary = only_viral_targets %>% 
+  group_by(name_group) %>% 
+  summarise(
+    mean_rpm_ngs = mean(NGS, na.rm = TRUE),
+    mean_rpm_msspe = mean(MSSPE, na.rm = TRUE),
+    fold_enrichment = mean(mean_rpm_enrichment, na.rm = TRUE),
+    iqr = paste0(
+      round(quantile(mean_rpm_enrichment, 0.25, na.rm = TRUE), 1),
+      "–",
+      round(quantile(mean_rpm_enrichment, 0.75, na.rm = TRUE), 1)
+    ),
+    p_value = {
+      # ensure both vectors are aligned and remove any NA pairs
+      paired_data <- na.omit(data.frame(ngs = NGS, msspe = MSSPE))
+      
+      if(nrow(paired_data) > 1) {
+        wilcox.test(paired_data$ngs,
+                    paired_data$msspe,
+                    alternative = "two.sided",
+                    paired = TRUE)$p.value
+      } else {
+        NA_real_
+      }
+    }
+  )
+
+print(viral_target_enrichment_summary)
+```
+
 ```{r}
 # Overall Enrichment
 
 # All viruses & enrichment 
 overall_tbl = all_viruses %>% 
-  filter(str_detect(name_group, regex(paste(targets, collapse = "|"), ignore_case = TRUE))) %>% # filter to targeted viruses
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
   group_by(name_group, library_prep) %>% 
   summarize(mean_nt_rpm = mean(nt_rpm, na.rm = TRUE),
             mean_reads = mean(nt_count, na.rm = TRUE), .groups = "drop") %>%
   arrange(desc(name_group))
 
 # Calculate fold change for each virus
-fold_changes <- path_summary %>%
+fold_changes <- overall_tbl %>%
   select(name_group, library_prep, mean_nt_rpm) %>%
   pivot_wider(names_from = library_prep, values_from = mean_nt_rpm) %>%
   mutate(fold_change = (`MSSPE` + 0.1)/(`NGS` + 0.1), log2FC = log2(fold_change)) %>% 
@@ -189,6 +248,20 @@ fold_changes <- path_summary %>%
 # Add fold change back to original data
 overall_tbl <- overall_tbl %>%
   left_join(fold_changes, by = "name_group")
+
+# overall mean and median fold change for All Targets
+geo_mean_FC <- 2^mean(only_viral_targets$log2FC, na.rm = TRUE); geo_mean_FC
+median_FC <- median(only_viral_targets$mean_rpm_enrichment, na.rm = TRUE); median_FC
+mean_FC = mean(only_viral_targets$mean_rpm_enrichment, na.rm = TRUE); mean_FC
+
+# Does MSSPE significantly enrich overall all targeted taxa and samples?
+wilcox.test(
+  only_viral_targets$NGS,
+  only_viral_targets$MSSPE,
+  paired = TRUE,
+  alternative = "two.sided" 
+)
+
 
 # Boxplot of mean_nt_rpm by library_prep
 ggplot(overall_tbl, aes(x = library_prep, y = mean_nt_rpm, fill = library_prep)) +
@@ -328,6 +401,7 @@ ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth, fill = virus)) +
     panel.grid.minor = element_blank()
   )
 ```
+
 ```{r}
 # Overall mean genome coverage by library prep
 # Prepare long-format data for plotting
@@ -410,38 +484,4 @@ hpv_plot + scale_fill_brewer(palette="YlGnBu")
 
 ```
 
-```{r}
-# Calculate mean nt_rpm for each taxon across samples
-path_summary <- all_viruses %>%
-  group_by(name_group, library_prep) %>%
-  filter(str_detect(name, regex(paste(targets, collapse = "|"), ignore_case = TRUE))) %>% # filter to targeted viruses
-  summarize(mean_nt_rpm = mean(nt_rpm, na.rm = TRUE), .groups = "drop") %>%
-  arrange(desc(mean_nt_rpm))
 
-# Calculate fold change for each virus
-fold_changes <- path_summary %>%
-  select(name_group, library_prep, mean_nt_rpm) %>%
-  pivot_wider(names_from = library_prep, values_from = mean_nt_rpm) %>%
-  mutate(fold_change = (`MSSPE` + 0.1)/(`NGS` + 0.1), log2FC = log2(fold_change)) %>% 
-  select(name_group, fold_change)
-
-# Add fold change back to original data
-path_summary_with_fc <- path_summary %>%
-  left_join(fold_changes, by = "name_group")
-
-# Create the plot
-path_enrich_boxplot <- ggplot(path_summary_with_fc, aes(x = name_group, y = mean_nt_rpm, fill = library_prep)) +
-    geom_bar(stat = "identity", position = "dodge", width = 0.7) +
-    geom_text(aes(label = ifelse(library_prep == "MSSPE", 
-                                paste0(round(fold_change, 1), "x"), "")),
-              position = position_dodge(width = 0.7), 
-              vjust = -0.5, size = 3) +
-    scale_fill_brewer(palette = "Set2") +
-    labs(title = "Off-target Enrichment of viral targets",
-         x = "Targeted Virus",
-         y = "Mean RPM") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-path_enrich_boxplot
-```

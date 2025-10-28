@@ -158,23 +158,26 @@ simulate_downsampling <- function(count_mat, depths, n_reps, targets, detection_
           left_join(sample_meta, by = c("sample" = "sample_name"))
         
         # --- Pathogen detection ---
-        if (length(targets) > 0) {
-          for (th in detection_thresholds) {
-            for (t in targets) {
-              col_name <- paste0("detect_", t, "_ge_", th)
-              if (t %in% taxa) {
-                reads <- rarefied[t, ]
-                sim_df[[col_name]] <- as.numeric(reads >= th)
-              } else {
-                sim_df[[col_name]] <- NA_real_
-              }
+        present <- intersect(targets, rownames(rarefied))
+        
+        for (th in detection_thresholds) {
+          for (t in targets) {
+            col_name <- paste0("detect_", t, "_ge_", th)
+            
+            if (t %in% present) {
+              sim_df[[col_name]] <- as.numeric(rarefied[t, ] >= th)
+            } else {
+              sim_df[[col_name]] <- 0  # assume non-detected, avoids NA spread
             }
           }
         }
+        
         
         results[[length(results) + 1]] <- sim_df
       }
     }
     
     bind_rows(results)
-  }
+}
+
+  
