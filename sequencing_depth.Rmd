@@ -17,58 +17,93 @@ source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 
 Sample Taxon Reports
 ```{r}
-
 # List all CSV files in the directory
-csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_3/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
 
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
 # Create a metadata dataframe to merge with taxon data
 sample_metadata = seq_metrics %>% 
-  select(sample_name) %>% 
+  select(sample_name, water_control, infection_class) %>% 
   mutate(
   # Library prep: MSSPE if ends with "_M"
   library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
 
   # Remove the _M suffix to get the core sample identifier
   core = str_remove(sample_name, "_M$"),
+  # Detect experiment 3 first (Cxxx_LPx)
+  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
 
-  # Base sample: extract first alphanumeric block (S2, S3, PC1, etc.)
-  base_sample = str_extract(core, "^[A-Za-z]+\\d+"),
+  # Base: first sample ID (e.g. S10, PC1)
+  base = str_extract(core, "^[A-Za-z]+\\d+"),
 
-  # Experiment classification logic
+  # Append -2 or -3 only if not exp3
+  suffix = case_when(
+    !is_exp3 & str_detect(core, "_2$") ~ "-2",
+    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    TRUE ~ ""
+  ),
+
+  base_sample = tolower(paste0(base, suffix)),
+
   experiment = case_when(
-      str_detect(core, "C\\d+.*LP\\d+") ~ 3,  # Cxxx_LPx present
-      str_detect(core, "_3$") ~ 2,           # only suffix _3 is exp2
-      TRUE ~ 1
+    is_exp3 ~ 3,
+    str_detect(core, "_3$") ~ 2,
+    TRUE ~ 1
   )
 ) %>%
-select(sample_name, base_sample, library_prep, experiment)
-```
+select(sample_name, base_sample, library_prep, experiment, water_control, infection_class)
 
-```{r}
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
-species_data <- merged_data %>%
-  filter(tax_level == 1)
-
-species_data_filtered = species_data %>% 
-  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
-  filter(nt_alignment_length > 50) %>% 
-  filter(!is.na(base_sample)) %>%   # filter out Negative Controls
+all_data_species <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  filter(experiment == 3) %>%  # filter in specific experiments
+  filter(water_control == "No") %>%   # filter out Negative Controls
   filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
 ```
 
 ```{r}
+species_data_filtered = all_data_species %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50) 
+```
+
+```{r}
 # ---- USER PARAMETERS ----
-depths <- c(1e5, 5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6, 9e6, 10e6)     # Target depths to simulate
-n_reps <- 3                        # Replicates per depth
-target_taxa <- c("Alphapapillomavirus 7", "Rotavirus C", "Teschovirus A", "Sapporo virus")  # pathogens to track
+depths <- c(5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 11e6, 13e6, 15e6, 17e6, 19e6, 21e6)     # Target depths to simulate
+n_reps <- 10                        # Replicates per depth
+target_taxa <- c("Alphapapillomavirus 7", "Teschovirus A", "Sapporo virus")  # pathogens to track
 detection_thresholds <- c(1, 5)  # read thresholds
+
+# specific names that should group together
+ent_v = "Enterovirus"
+circo_v = "Circovirus"
+sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
+tes_v = "Teschovirus"
+aich_v = "Aichivirus"
+astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
+hpv18 = "Alphapapillomavirus"
+sapel_v = "Sapelovirus"
+boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
+
+# Virus pattern definitions
+patterns <- c(
+  Enterovirus      = ent_v,
+  Circovirus       = circo_v,
+  SapovirusGroup   = sapo_v,
+  Teschovirus      = tes_v,
+  Aichivirus       = aich_v,
+  AstrovirusGroup  = astr_v,
+  Alphapapilloma   = hpv18,
+  Sapelovirus      = sapel_v,
+  BocavirusGroup   = boc_v
+)
 ```
 
 ```{r}
@@ -92,7 +127,7 @@ rownames(count_mat) <- taxa
 
 ```{r}
 # Start the simulation!
-res <- simulate_downsampling(count_mat, depths, n_reps, target_taxa, detection_thresholds)
+res <- simulate_downsampling(count_mat, depths, n_reps, patterns, detection_thresholds)
 ```
 
 ```{r}
@@ -183,8 +218,8 @@ res2 <- simulate_downsampling_targets(count_mat, depths, n_reps, target_taxa, de
 
 ```{r}
 # Detection summary
-det_cols <- grep("^detect_", names(res2), value = TRUE)
-det_summary <- res2 %>%
+det_cols <- grep("^detect_", names(res), value = TRUE)
+det_summary <- res %>%
   group_by(depth) %>%
   summarise(across(all_of(det_cols), ~ mean(.x, na.rm = TRUE))) %>%
   pivot_longer(-depth, names_to = "target_thresh", values_to = "detect_prob") %>%

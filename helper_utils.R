@@ -120,7 +120,7 @@ process_csv_file <- function(file_path) {
 }
 
 # ---- DOWNSAMPLING SIMULATION ----
-simulate_downsampling <- function(count_mat, depths, n_reps, targets, detection_thresholds) {
+simulate_downsampling <- function(count_mat, depths, n_reps, patterns, detection_thresholds) {
     taxa <- rownames(count_mat)
     samples <- colnames(count_mat)
     
@@ -157,17 +157,21 @@ simulate_downsampling <- function(count_mat, depths, n_reps, targets, detection_
         sim_df <- sim_df %>%
           left_join(sample_meta, by = c("sample" = "sample_name"))
         
-        # --- Pathogen detection ---
-        present <- intersect(targets, rownames(rarefied))
-        
+        # --- Pathogen detection using pattern matching ---
         for (th in detection_thresholds) {
-          for (t in targets) {
-            col_name <- paste0("detect_", t, "_ge_", th)
+          for (vname in names(patterns)) {
             
-            if (t %in% present) {
-              sim_df[[col_name]] <- as.numeric(rarefied[t, ] >= th)
+            # build col name: e.g. detect_SapovirusGroup_ge_5
+            col_name <- paste0("detect_", vname, "_ge_", th)
+            
+            # find all matching rows using regex
+            match_rows <- grepl(patterns[[vname]], rownames(rarefied), ignore.case = TRUE)
+            
+            if (any(match_rows)) {
+              # sum logical detection across all matched taxa (≥ threshold)
+              sim_df[[col_name]] <- as.numeric(colSums(rarefied[match_rows, , drop = FALSE] >= th) > 0)
             } else {
-              sim_df[[col_name]] <- 0  # assume non-detected, avoids NA spread
+              sim_df[[col_name]] <- 0
             }
           }
         }
