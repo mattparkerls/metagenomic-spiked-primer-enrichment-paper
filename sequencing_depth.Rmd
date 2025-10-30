@@ -65,7 +65,8 @@ all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
   filter(experiment == 3) %>%  # filter in specific experiments
   filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+  filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
+  filter(infection_class != "Definite") # filter out positive controls
 ```
 
 ```{r}

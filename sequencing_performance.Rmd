@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r}
@@ -27,16 +29,16 @@ seq_metrics %>%
 
 Sample Taxon Reports
 ```{r}
-
 # List all CSV files in the directory
 csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
 
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
 # Create a metadata dataframe to merge with taxon data
 sample_metadata = seq_metrics %>% 
-  select(sample_name) %>% 
+  select(sample_name, water_control, infection_class, total_reads, subsampled_fraction, passed_filters) %>% 
   mutate(
   # Library prep: MSSPE if ends with "_M"
   library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
@@ -63,12 +65,18 @@ sample_metadata = seq_metrics %>%
     str_detect(core, "_3$") ~ 2,
     TRUE ~ 1
   )
-) %>%
-select(sample_name, base_sample, library_prep, experiment)
+) 
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  #filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") # filter out positive controls
 ```
 
 ```{r}
@@ -78,17 +86,18 @@ species_data <- merged_data %>%
 
 species_data_filtered = species_data %>% 
   filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
-  filter(nt_alignment_length > 50) %>% 
-  filter(!is.na(base_sample)) %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+  filter(nt_alignment_length > 50)
 
 ```
 
 
 ```{r}
-seq_metrics_tbl = seq_metrics %>% 
-  left_join(sample_metadata, by = "sample_name") %>% 
-  filter(!sample_name %in% c("s5-2")) %>% 
+seq_metrics_tbl = sample_metadata %>% 
+  #left_join(sample_metadata, by = "sample_name") %>% 
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(!base_sample %in% c("s5-2")) %>% 
+  filter(experiment == 2 | experiment == 3) %>% 
   mutate(
     total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
   )
@@ -157,7 +166,7 @@ seq_metrics_summary %>%
     caption = "Overall sequencince performance comparison between mNGS and MSSPE"
   ) %>%
   kable_styling(
-    full_width = FALSE,
+    full_width = TRUE,
     position = "center",
     bootstrap_options = c("striped", "hover", "condensed", "responsive")
   )

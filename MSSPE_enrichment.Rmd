@@ -3,16 +3,18 @@ title: "R Notebook"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 ```{r}
 library(dplyr)
 library(tidyr)
-library(lme4)
 library(stringr)
 library(ggplot2)
 library(RColorBrewer)
 library(tidyverse)
+library(knitr)
+library(kableExtra)
 source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 ```
 
@@ -41,12 +43,12 @@ sample_metadata = seq_metrics %>%
 
   # Append -2 or -3 only if not exp3
   suffix = case_when(
-    !is_exp3 & str_detect(core, "_2$") ~ "-2",
-    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    !is_exp3 & str_detect(core, "_2$") ~ "-2", # 
+    !is_exp3 & str_detect(core, "_3$") ~ "-3", #
     TRUE ~ ""
   ),
 
-  base_sample = tolower(paste0(base, suffix)),
+  base_sample = tolower(paste0(base)),
 
   experiment = case_when(
     is_exp3 ~ 3,
@@ -62,22 +64,29 @@ merged_data <- all_data %>%
 
 # get hpv data from experiment 1 & 2
 hpv_data = merged_data %>% 
-  filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE))) %>% 
-  filter(experiment == 1 | experiment == 2)
+  filter(experiment == 1 | experiment == 2) %>% 
+  filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE)))
+
+# kobuvirus data from experiment 1 to compare to experiment 3
+pkv_data = merged_data %>% 
+  filter(experiment == 1) %>% 
+  filter(str_detect(name, regex("Aichivirus", ignore_case = TRUE)))
 
 # remove MSSPE libraries that are also experiment 1 (after we have already pulled the hpv rows)
-#merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
+merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
   filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
   filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) # filter out zymo fecal controls
+  filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
+  filter(infection_class != "Definite") # filter out positive controls
 
 # add hpv data to the rest of the data
 all_data_species = all_data_species %>% 
-  add_row(hpv_data)
+  add_row(hpv_data) %>% 
+  add_row(pkv_data)
 ```
 
 
@@ -182,8 +191,8 @@ alltarget_boxplot = ggplot(only_viral_targets, aes(x = name_group, y = mean_rpm_
             aes(x = name_group, y = mean_value, label = paste0("μ: ", round(mean_value, 1))),
             vjust = -1, color = "black", size = 3.2) +
   labs(
-    title = "Viral Enrichment - All Samples",
-    x = "Virus",
+    title = "Viral Enrichment",
+    x = "",
     y = "Mean rPM Fold Change (Enrichment)"
   ) +
   theme_bw() +
@@ -195,19 +204,21 @@ alltarget_boxplot = ggplot(only_viral_targets, aes(x = name_group, y = mean_rpm_
 alltarget_boxplot
 ```
 
+
 ```{r}
 # final table for each viral target
 viral_target_enrichment_summary = only_viral_targets %>% 
   group_by(name_group) %>% 
   summarise(
-    mean_rpm_ngs = mean(NGS, na.rm = TRUE),
-    mean_rpm_msspe = mean(MSSPE, na.rm = TRUE),
-    fold_enrichment = mean(mean_rpm_enrichment, na.rm = TRUE),
+    mean_rpm_ngs = round(mean(NGS, na.rm = TRUE),2),
+    mean_rpm_msspe = round(mean(MSSPE, na.rm = TRUE),2),
+    fold_enrichment = round(mean(mean_rpm_enrichment, na.rm = TRUE),2),
     iqr = paste0(
       round(quantile(mean_rpm_enrichment, 0.25, na.rm = TRUE), 1),
       "–",
       round(quantile(mean_rpm_enrichment, 0.75, na.rm = TRUE), 1)
     ),
+    n_pairs = n(),
     p_value = {
       # ensure both vectors are aligned and remove any NA pairs
       paired_data <- na.omit(data.frame(ngs = NGS, msspe = MSSPE))
@@ -223,8 +234,30 @@ viral_target_enrichment_summary = only_viral_targets %>%
     }
   )
 
-print(viral_target_enrichment_summary)
+#print(viral_target_enrichment_summary)
+
+# Make table pretty
+viral_target_enrichment_summary %>%
+  rename(
+    "Virus" = name_group,
+    "rPM (NGS)" = mean_rpm_ngs,
+    "rPM (MSSPE)" = mean_rpm_msspe,
+    "Fold Enrichment" = fold_enrichment,
+    "IQR" = iqr,
+    "p value" = p_value
+  ) %>% 
+  select(-n_pairs) %>% 
+  kable(
+    format = "html",  # or "latex" if using LaTeX
+    caption = "Enrichment across all paired samples per viral target"
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
 ```
+
 
 ```{r}
 # Overall Enrichment
@@ -262,6 +295,11 @@ wilcox.test(
   alternative = "two.sided" 
 )
 
+overall_tbl_summary = overall_tbl %>% 
+  group_by(name_group, library_prep) %>% 
+  summarise(mean_rpm = mean(mean_nt_rpm))
+
+#overall_tbl_summary %>% filter(library_prep == "MSSPE") %>% pull(mean_rpm) %>% mean()
 
 # Boxplot of mean_nt_rpm by library_prep
 ggplot(overall_tbl, aes(x = library_prep, y = mean_nt_rpm, fill = library_prep)) +
@@ -270,8 +308,8 @@ ggplot(overall_tbl, aes(x = library_prep, y = mean_nt_rpm, fill = library_prep))
   scale_y_continuous(trans = "log10") +  # log scale if nt_rpm varies widely
   labs(
     x = "",
-    y = "Mean rPM",
-    title = "Mean rPM Across All Targeted Viruses"
+    y = "mean rPM",
+    title = "rPM Enrichment Across All Targeted Viruses"
   ) +
   theme_minimal(base_size = 14) +
   theme(
@@ -324,34 +362,66 @@ paired_tbl <- cov_summary %>%
 
 # 5️⃣ Summary table (1 row per metric)
 wilcox_summary = paired_tbl %>% 
-  group_by(virus) %>% 
+  replace_na(list(breadth_1x_MSSPE = 0, breadth_1x_NGS = 0, enrichment_breadth = 0)) %>% # some samples had reads but no coverage
+  group_by(virus) %>%
   summarise(
-    mean_ngs = mean(breadth_1x_NGS),
-    mean_msspe = mean(breadth_1x_MSSPE),
-    mean_enrichment = mean(enrichment_breadth),
+    mean_ngs = round(mean(breadth_1x_NGS, na.rm = TRUE),2),
+    mean_msspe = round(mean(breadth_1x_MSSPE, na.rm = TRUE),2),
+    percent_enrichment = round(mean(breadth_1x_MSSPE - breadth_1x_NGS, na.rm = TRUE),2),
     iqr = paste0(
-      round(quantile(enrichment_breadth, 0.25, na.rm = TRUE), 1),
+      round(quantile(breadth_1x_MSSPE - breadth_1x_NGS, 0.25, na.rm = TRUE), 1),
       "–",
-      round(quantile(enrichment_breadth, 0.75, na.rm = TRUE), 1)
+      round(quantile(breadth_1x_MSSPE - breadth_1x_NGS, 0.75, na.rm = TRUE), 1)
     ),
-    p_value = {
-      # keep only rows where both paired values exist
-      df <- na.omit(data.frame(
-        ngs = breadth_1x_NGS,
-        msspe = breadth_1x_MSSPE
-      ))
+    n_pairs = n(),
+    p_value = if (n() > 1) {
+      test <- wilcox.test(
+        breadth_1x_MSSPE,
+        breadth_1x_NGS,
+        paired = TRUE,
+        alternative = "two.sided",
+        exact = FALSE
+      )
+      test$p.value
+    } else {
+      NA_real_
+    },
+    .groups = "drop"
+  )
 
-      if (nrow(df) > 1) {
-        wilcox.test(df$ngs, df$msspe,
-                    paired = TRUE,
-                    alternative = "two.sided")$p.value
-      } else {
-        NA_real_
-      }
-    }
-)
+#print(wilcox_summary)
 
-print(wilcox_summary)
+# Make table pretty
+wilcox_summary %>%
+  mutate(
+    virus = recode(virus,
+      `astrov` = "PAstV",
+      `etvg` = "EV-G",
+      `hpv18` = "HPV18",
+      `pbov` = "PBoV",
+      `pcv` = "PCV",
+      `sapel` = "PSV",
+      `tev` = "PTV"
+    )
+  ) %>% 
+  rename(
+    "Virus" = virus,
+    "% coverage (NGS)" = mean_ngs,
+    "% coverage (MSSPE)" = mean_msspe,
+    "Enrichment (%)" = percent_enrichment,
+    "IQR" = iqr,
+    "p value" = p_value
+  ) %>% 
+  select(-n_pairs) %>% 
+  kable(
+    format = "html",  # or "latex" if using LaTeX
+    caption = "Genome coverage enrichment across all paired samples per viral target"
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
 ```
 
 ```{r}
