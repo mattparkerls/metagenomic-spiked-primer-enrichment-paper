@@ -1,3 +1,15 @@
+# Mac files
+.DS_Store
+
+# Project files
+/charts/
+/data/
+/shortread_utils/
+/pathogen_investigation/
+/msspe_regression/
+*.nb.html
+*.tex
+
 # History files
 .Rhistory
 .Rapp.history

@@ -1,0 +1,620 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+---
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(vegan)
+library(lme4)
+library(stringr)
+library(patchwork)
+library(kableExtra)
+library(emmeans)
+knitr::opts_chunk$set(dev = "cairo_pdf")
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+```
+
+Sample Taxon Reports
+```{r}
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# separate slurry from pond samples
+pond_samples = c("s9","s10","s19","s20")
+
+# Create a metadata dataframe to merge with taxon data
+sample_metadata = seq_metrics %>% 
+  select(sample_name, water_control, infection_class) %>% 
+  mutate(
+  # Library prep: MSSPE if ends with "_M"
+  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+
+  # Remove the _M suffix to get the core sample identifier
+  core = str_remove(sample_name, "_M$"),
+  # Detect experiment 3 first (Cxxx_LPx)
+  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+
+  # Base: first sample ID (e.g. S10, PC1)
+  base = str_extract(core, "^[A-Za-z]+\\d+"),
+
+  # Append -2 or -3 only if not exp3
+  suffix = case_when(
+    !is_exp3 & str_detect(core, "_2$") ~ "-2",
+    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    TRUE ~ ""
+  ),
+
+  base_sample = tolower(paste0(base, suffix)),
+
+  # group slurry vs environmental samples
+  sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
+  
+  experiment = case_when(
+    is_exp3 ~ 3,
+    str_detect(core, "_3$") ~ 2,
+    TRUE ~ 1
+  )
+) %>%
+select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+all_data_species <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  filter(experiment == 3) %>%  # filter in specific experiments
+  filter(water_control == "No") %>% 
+  filter(infection_class != "Definite") # filter out positive controls
+```
+
+```{r}
+species_data_filtered = all_data_species %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50) 
+```
+
+```{r}
+# specific names that should group together
+ent_v = "Enterovirus G"
+circo_v = "Circovirus"
+sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
+tes_v = "Teschovirus"
+aich_v = "Aichivirus"
+astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
+hpv18 = "Alphapapillomavirus"
+sapel_v = "Sapelovirus"
+boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
+
+# Virus pattern definitions
+patterns <- c(
+  EVG      = ent_v,
+  PCV       = circo_v,
+  PSapoV   = sapo_v,
+  PTeV      = tes_v,
+  PKV       = aich_v,
+  PAstV  = astr_v,
+  #HPV18   = hpv18,
+  PSapeV      = sapel_v,
+  PBoV   = boc_v
+)
+```
+
+```{r}
+# Extract sample metadata (one row per sample)
+sample_meta <- all_data_species %>%
+  select(sample_name, library_prep, experiment, sample_type) %>%
+  distinct()
+
+# Create wide count matrix: taxa x samples
+#count_mat <- species_data_filtered %>%
+count_mat = all_data_species %>% 
+  group_by(sample_name, name) %>%
+  summarise(reads = mean(nt_count, na.rm = TRUE), .groups = "drop") %>% # counting reads for each taxa per sample
+  pivot_wider(names_from = sample_name, values_from = reads, values_fill = 0) %>% 
+  column_to_rownames("name")
+
+```
+
+```{r}
+# ---- USER PARAMETERS ----
+#depths <- c(5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 11e6)     # Target depths to simulate
+depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6)
+n_reps <- 10                        # Replicates per depth
+
+# Start the simulation!
+res <- simulate_downsampling(count_mat, depths, n_reps)
+```
+
+```{r}
+# ---- SUMMARIZE RESULTS ----
+# Diversity summary
+div_summary <- res %>%
+  group_by(depth) %>%
+  summarise(
+    richness_mean = mean(richness),
+    richness_sd = sd(richness),
+    shannon_mean = mean(shannon),
+    shannon_sd = sd(shannon),
+    .groups = "drop"
+  ) 
+
+# By library prep
+div_summary_libprep <- res %>%
+  group_by(depth, library_prep) %>%
+  summarise(
+    richness_mean = mean(richness),
+    richness_sd = sd(richness),
+    shannon_mean = mean(shannon),
+    shannon_sd = sd(shannon),
+    .groups = "drop"
+  ) 
+
+# By sample type
+div_summary_sampletype <- res %>%
+  group_by(depth, sample_type) %>%
+  summarise(
+    richness_mean = mean(richness),
+    richness_sd = sd(richness),
+    shannon_mean = mean(shannon),
+    shannon_sd = sd(shannon),
+    .groups = "drop"
+  ) 
+
+# remove _M from samples names for comparison
+res = res %>% 
+  mutate(sample = str_remove(sample, "_M.*$"))
+
+res_agg <- res %>%
+  rename(richness_val = richness) %>% 
+  group_by(sample, library_prep, depth) %>%
+  summarise(
+    richness_mean = mean(richness_val),
+    shannon_mean = mean(shannon),
+    .groups = "drop"
+  )
+
+# do friedman test measuring richness by library prep pairing by sample
+friedman_results <- res_agg %>%
+  group_by(depth) %>%
+  summarise(
+    test = list(
+      friedman.test(richness_mean ~ library_prep | sample)
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    statistic = map_dbl(test, ~ .$statistic),
+    p_value   = map_dbl(test, ~ .$p.value)
+  )
+
+# Join friedman results back to the overall table
+div_summary = div_summary %>% 
+  left_join(friedman_results, by = "depth")
+
+div_summary = div_summary %>% 
+  select(-shannon_sd, -richness_sd, -test, -statistic)
+
+div_summary
+```
+
+Rarefaction curves
+```{r}
+div_summary_libprep_filter = div_summary_libprep %>% 
+  filter(depth <= 7.0e+06) %>% 
+  rename("Library Prep" = library_prep)
+
+# Plot Rarefaction Curve
+p1 <- ggplot(div_summary_libprep_filter, aes(x = depth/1e6, y = richness_mean, fill = `Library Prep`, color = `Library Prep`)) +
+  geom_line(aes(y = richness_mean)) +
+  geom_point(aes(y = richness_mean)) +
+  #geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd), alpha = 0.2) +
+  labs(x = "Sequencing depth (million reads)", y = "Species richness",
+       title = "a") +
+  theme_bw()
+p1
+
+div_summary_sampletype_filter = div_summary_sampletype %>% 
+  filter(depth <= 7.0e+06) %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater")
+  ) %>% 
+  rename("Sample Type" = sample_type)
+
+# Plot Rarefaction Curve
+p2 <- ggplot(div_summary_sampletype_filter, aes(x = depth/1e6, y = richness_mean, color = `Sample Type`)) +
+  geom_line(aes(y = richness_mean)) +
+  geom_point(aes(y = richness_mean)) +
+  scale_color_brewer(palette = "Set2") +
+  #geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd), alpha = 0.2) +
+  labs(x = "Sequencing depth (million reads)", y = "Species richness",
+       title = "b") +
+  theme_bw()
+p2
+
+combined_curves = p1 / p2
+combined_curves
+
+```
+TARGET-SPECIFIC SEQ DEPTH ANALYSIS
+```{r}
+# Start the simulation!
+res_targets <- simulate_downsampling_targets(
+  count_mat,
+  depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6),
+  n_reps = 10,
+  patterns
+)
+```
+
+
+```{r}
+# Function to calculate detection probabilities from rarefied reads
+summarize_detection <- function(res_targets, detection_threshold) {
+  
+  # 1. Pivot longer: each row = sample x replicate x target
+  target_cols <- names(res_targets)[
+    !(names(res_targets) %in% c("sample", "depth", "rep", "library_prep", "experiment", "sample_type"))
+  ]
+  
+  det_long <- res_targets %>%
+    pivot_longer(
+      cols = all_of(target_cols),
+      names_to = "target",
+      values_to = "total_reads"
+    ) %>%
+    mutate(
+      detected = as.integer(total_reads >= detection_threshold)
+    )
+  
+  # 2. Detection probability per depth and target
+  det_summary <- det_long %>%
+    group_by(depth, target) %>%
+    summarise(
+      mean_total_reads = mean(total_reads, na.rm = TRUE),
+      detect_prob = mean(detected, na.rm = TRUE),
+      n_reps = n(),
+      .groups = "drop"
+    )
+  
+  # 3. Detection probability by library prep
+  det_summary_libprep <- det_long %>%
+    group_by(depth, library_prep, target) %>%
+    summarise(
+      mean_total_reads = mean(total_reads, na.rm = TRUE),
+      detect_prob = mean(detected, na.rm = TRUE),
+      n_reps = n(),
+      .groups = "drop"
+    )
+  
+  list(
+    long = det_long,
+    summary = det_summary,
+    summary_libprep = det_summary_libprep
+  )
+}
+
+# Summarized detection probabilities from simulation
+res_summary <- summarize_detection(res_targets, detection_threshold = 5)
+
+# Access outputs
+det_long <- res_summary$long                # replicate-level total reads + detected 0/1
+det_summary <- res_summary$summary         # mean reads + detection prob per depth x target
+det_summary_libprep <- res_summary$summary_libprep  # mean reads + detection prob per depth x target x library_prep
+```
+
+Linear Mixed Model for Diversity
+```{r}
+library(glmmTMB)
+library(performance)
+
+# get response data from simulation
+model_div_data = res %>% 
+  mutate(
+    depth_scaled = depth / 1e5,          # scale depth
+    library_prep = factor(library_prep), # convert to factor
+    library_prep = relevel(library_prep, ref = "NGS")  # set NGS as reference
+  )
+
+# create base model for diversity metrics
+model_seq_depth_div <- glmmTMB(
+  richness ~ library_prep * depth_scaled * sample_type + (1 | sample),
+  data = model_div_data,
+  family = nbinom2() # use if Richness
+
+)
+# print summary of model performance
+summary(model_seq_depth_div)
+
+# or profile CI (more accurate but slower)
+exp(confint(model_seq_depth_div, parm="beta_", method="profile"))
+
+# overdispersion
+overdisp_fun(model_seq_depth_div)
+
+```
+Microbial diversity sequencing depth tables
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+
+# Fixed effects table
+fixed_tbl_div <- summary(model_seq_depth_div)$coefficients$cond %>%
+  as.data.frame() %>%
+  rownames_to_column("Effect") %>%
+  rename(Estimate = Estimate, SE = `Std. Error`, z = `z value`, p = `Pr(>|z|)`)
+
+# Add odds ratio and 95% CI
+fixed_tbl_div <- fixed_tbl_div %>%
+  mutate(
+    OR = exp(Estimate),
+    CI_lower = exp(Estimate - 1.96*SE),
+    CI_upper = exp(Estimate + 1.96*SE),
+    Percent_change = (OR - 1) * 100,                 
+    Effect = recode(Effect,
+                    `(Intercept)` = "intercept",
+                    `library_prepMSSPE` = "Library prep",
+                    `depth_scaled` = "Sequencing depth",
+                    `sample_typeslurry` = "Sample type",
+                    `library_prepMSSPE:depth_scaled` = "Lib prep * Sequencing depth",
+                    `library_prepMSSPE:sample_typeslurry` = "Lib prep * Sample type",
+                    `depth_scaled:sample_typeslurry` = "Sequencing depth * Sample type",
+                    `library_prepMSSPE:depth_scaled:sample_typeslurry` = "Lib Prep * Depth * Sample Type"
+                    )
+  ) %>% 
+  rename(
+    "Percent change" = Percent_change,
+    "CI 25%" = CI_lower,
+    "CI 75%" = CI_upper
+  )
+
+# Random effects table
+# Extract variance components
+vc <- VarCorr(model_seq_depth_div)
+
+random_tbl_div <- data.frame(
+  Random_Effect = c("Virus target", "Sample"),
+  Variance = c(vc$cond$target[1,1], vc$cond$sample[1,1]),
+  SD = sqrt(c(vc$cond$target[1,1], vc$cond$sample[1,1]))
+)
+
+# Combine in a nice list for reporting
+list(Fixed_Effects = fixed_tbl_div, Random_Effects = random_tbl_div) 
+# Optional: use kable() to print nicely in RMarkdown
+kable(fixed_tbl_div, digits = 3, caption = "Fixed effects from GLMM (negative binomial)")
+kable(random_tbl_div, digits = 3, caption = "Random effects (variance components) from GLMM")
+
+```
+
+Linear Mixed Model for Targets
+```{r}
+library(glmmTMB)
+library(broom.mixed)
+library(performance)
+
+det_long <- det_long %>%
+  mutate(
+    depth_scaled = depth / 1e5,          # scale depth
+    library_prep = factor(library_prep), # convert to factor
+    library_prep = relevel(library_prep, ref = "NGS")  # set NGS as reference
+  )
+
+# create base model for detection probability
+model_seq_depth <- glmmTMB(
+  detected ~ library_prep * depth_scaled + (1 | target) + (1 | sample),
+  data = det_long,
+  family = binomial(link = "logit")
+)
+
+# print summary of model performance
+summary(model_seq_depth)
+
+# or profile CI (more accurate but slower)
+exp(confint(model_seq_depth, parm="beta_", method="profile"))
+
+# standard error
+summary(model_seq_depth)$coefficients$cond
+
+# check residuals
+r2_model <- r2_nakagawa(model_seq_depth)
+r2_model
+
+# check overdispersion
+overdisp_fun(model_seq_depth)
+
+# Fit zero-inflated model for comparison
+model_zi <- glmmTMB(
+  detected ~ library_prep * depth_scaled + (1|target) + (1|sample),
+  ziformula = ~1,
+  data = det_long,
+  family = binomial
+)
+
+# Compare AIC
+AIC(model_seq_depth, model_zi)
+
+# Compare alternative sequencing depth modeling
+
+# try log transformed depth
+det_long <- det_long %>%
+  mutate(log_depth = log(depth))
+
+model_log <- glmmTMB(
+  detected ~ library_prep * log_depth + (1|target) + (1|sample),
+  data = det_long,
+  family = binomial
+)
+# print AIC comparison
+AIC(model_seq_depth, model_log)
+
+```
+
+Viral target sequencing depth tables
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+
+# Fixed effects table
+fixed_tbl <- summary(model_seq_depth)$coefficients$cond %>%
+  as.data.frame() %>%
+  rownames_to_column("Effect") %>%
+  rename(Estimate = Estimate, SE = `Std. Error`, z = `z value`, p = `Pr(>|z|)`)
+
+# Add odds ratio and 95% CI
+fixed_tbl <- fixed_tbl %>%
+  mutate(
+    OR = exp(Estimate),
+    CI_lower = exp(Estimate - 1.96*SE),
+    CI_upper = exp(Estimate + 1.96*SE),
+    Effect = recode(Effect,
+                    `(Intercept)` = "intercept",
+                    `library_prepMSSPE` = "Library prep",
+                    `depth_scaled` = "Sequencing depth",
+                    `library_prepMSSPE:depth_scaled` = "Library prep * Sequencing depth"
+                    )
+  ) %>% 
+  rename(
+    "CI 25%" = CI_lower,
+    "CI 75%" = CI_upper
+  )
+
+# Random effects table
+# Extract variance components
+vc <- VarCorr(model_seq_depth)
+
+random_tbl <- data.frame(
+  Random_Effect = c("Virus target", "Sample"),
+  Variance = c(vc$cond$target[1,1], vc$cond$sample[1,1]),
+  SD = sqrt(c(vc$cond$target[1,1], vc$cond$sample[1,1]))
+)
+
+# Combine in a nice list for reporting
+list(Fixed_Effects = fixed_tbl, Random_Effects = random_tbl) 
+# Optional: use kable() to print nicely in RMarkdown
+kable(fixed_tbl, digits = 3, caption = "Fixed effects from GLMM (binomial)")
+kable(random_tbl, digits = 3, caption = "Random effects (variance components) from GLMM")
+
+```
+
+Viral sequencing depth plots
+```{r}
+# Create a grid of sequencing depths for prediction
+depth_grid <- seq(min(det_long$depth_scaled), 
+                  max(det_long$depth_scaled), 
+                  length.out = 100)
+
+newdata <- expand.grid(
+  library_prep = c("MSSPE", "NGS"),
+  depth_scaled = depth_grid
+)
+
+# Predicted probabilities and 95% CI using emmeans
+emm <- emmeans(model_seq_depth, ~ library_prep | depth_scaled, 
+               at = list(depth_scaled = depth_grid), type="response")
+
+emm_df <- as.data.frame(emm)
+
+# Rename columns for clarity
+emm_df <- emm_df %>%
+  rename(Detection_Prob = prob, 
+         CI_Lower = asymp.LCL, 
+         CI_Upper = asymp.UCL)
+
+# Plot
+ggplot(emm_df, aes(x = depth_scaled*1e5, y = Detection_Prob, color = library_prep)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = CI_Lower, ymax = CI_Upper, fill = library_prep), alpha = 0.2, color = NA) +
+  scale_x_continuous(name = "Sequencing depth (reads)") +
+  scale_y_continuous(name = "Predicted detection probability", limits = c(0,1)) +
+  labs(color = "Library prep", fill = "Library prep") +
+  theme_minimal(base_size = 14) +
+  ggtitle("Predicted virus detection probability vs. sequencing depth")
+```
+
+
+Tables
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+
+det_summary_libprep_box_format <- det_summary_libprep %>%
+  group_by(depth, library_prep, target) %>%
+  summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
+            .groups = "drop")
+
+det_summary_libprep_box_format
+
+det_summary_wide <- det_summary_libprep_box_format %>%
+  group_by(target, depth, library_prep) %>%               # average across library preps if multiple
+  summarise(mean_prob = mean(mean_prob), .groups = "drop") %>%
+  mutate(
+    depth = paste0(depth / 1e6, "M")
+  ) %>% 
+  pivot_wider(
+    names_from = c(depth),
+    values_from = mean_prob
+  ) 
+
+det_summary_wide
+
+det_summary_wide %>%
+  rename(
+    "Virus" = target,
+    "Library Prep" = library_prep
+  ) %>% 
+  select(-`0.2M`,-`0.4M`,-`0.6M`,-`0.8M`,-`1M`,-`1.2M`,-`1.4M`) %>% 
+  kable(
+    format = "latex",  # or "latex" if using LaTeX
+    caption = "Detection probability per viral target at varying sequencing depths",
+    digits = 2,
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+  )
+```
+
+```{r}
+# Plot Target Curve
+#rare_targets_curve <- ggplot(det_summary, aes(x = depth/1e6, y = detect_prob, color = target)) +
+  #geom_line() + geom_point() +
+  #facet_wrap(~threshold, labeller = labeller(threshold = function(x) paste("≥", x, "reads"))) +
+  #labs(x = "Depth (million reads)", y = "Detection probability",
+       #title = "a") +
+  #theme(legend.position = "none")
+
+#rare_targets_curve
+
+
+# Plot Library Prep Curve
+rare_targets_curve_prep <- ggplot(det_summary_libprep_box_format, aes(x = depth/1e6, y = mean_prob, color = target, linetype = library_prep)) +
+  geom_line() +   # small horizontal dodge to separate lines
+  #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
+  geom_point() +
+  facet_wrap(~library_prep) +
+  labs(x = "Depth (million reads)", y = "Detection probability",
+       title = "b") +
+  theme_bw()
+rare_targets_curve_prep
+
+#combined_target_curves = rare_targets_curve / rare_targets_curve_prep
+#combined_target_curves
+```
+
+

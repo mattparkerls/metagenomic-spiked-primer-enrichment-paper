@@ -1,0 +1,424 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+
+---
+
+```{r}
+library(phyloseq)
+library(microbiome)
+library(tidyverse)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+library(stringr)
+library(patchwork)
+library(viridis)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+knitr::opts_chunk$set(dev = "cairo_pdf")
+
+```
+
+Sequencing Summary Metrics
+```{r}
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+seq_metrics %>% 
+  group_by(water_control) %>% 
+  summarize(Mean_reads = mean(passed_filters, na.rm = TRUE))
+    
+```
+
+
+Sample Taxon Reports
+```{r}
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+# separate slurry from pond samples
+pond_samples = c("s9","s10","s19","s20")
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# Create a metadata dataframe to merge with taxon data
+sample_metadata = seq_metrics %>% 
+  select(sample_name, water_control, infection_class, total_reads, subsampled_fraction, passed_filters, compression_ratio) %>% 
+  mutate(
+  # Library prep: MSSPE if ends with "_M"
+  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+
+  # Remove the _M suffix to get the core sample identifier
+  core = str_remove(sample_name, "_M$"),
+  # Detect experiment 3 first (Cxxx_LPx)
+  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+
+  # Base: first sample ID (e.g. S10, PC1)
+  base = str_extract(core, "^[A-Za-z]+\\d+"),
+
+  # Append -2 or -3 only if not exp3
+  suffix = case_when(
+    !is_exp3 & str_detect(core, "_2$") ~ "-2",
+    !is_exp3 & str_detect(core, "_3$") ~ "-3",
+    TRUE ~ ""
+  ),
+
+  base_sample = tolower(paste0(base, suffix)),
+
+  experiment = case_when(
+    is_exp3 ~ 3,
+    str_detect(core, "_3$") ~ 2,
+    TRUE ~ 1
+  ),
+  # group slurry vs environmental samples
+    sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry")
+) %>%
+select(sample_name, base_sample, total_reads, subsampled_fraction, passed_filters, library_prep, experiment, water_control, infection_class, sample_type, compression_ratio)
+
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  #filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") # filter out positive controls
+```
+
+```{r}
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1)
+
+species_data_filtered = species_data %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50)
+
+```
+
+
+```{r}
+seq_metrics_tbl_1 = sample_metadata %>% 
+  #left_join(sample_metadata, by = "sample_name") %>% 
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(!base_sample %in% c("s5-2")) %>% 
+  filter(experiment == 1) %>% 
+  mutate(
+    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+  )
+
+seq_metrics_summary_1 = seq_metrics_tbl_1 %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters, compression_ratio),
+    names_glue = "{.value}_{library_prep}"
+  ) 
+
+#Experiment 2 & 3
+seq_metrics_tbl_2 = sample_metadata %>% 
+  #left_join(sample_metadata, by = "sample_name") %>% 
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(!base_sample %in% c("s5-2")) %>% 
+  filter(experiment == 3) %>% 
+  mutate(
+    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+  )
+
+seq_metrics_summary_2 = seq_metrics_tbl_2 %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters, compression_ratio),
+    names_glue = "{.value}_{library_prep}"
+  ) 
+
+```
+
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+
+# Calculate total reads per sample for percentage calculations
+sample_totals <- species_data %>%
+  group_by(sample_name, base_sample, library_prep) %>%
+  summarise(
+    total_nt_count = sum(nt_count, na.rm = TRUE),
+    total_nr_count = sum(nr_count, na.rm = TRUE),
+    total_nt_rpm = sum(nt_rpm, na.rm = TRUE),
+    total_nr_rpm = sum(nr_rpm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Extract viral category data
+virus_data <- species_data %>%
+  filter(category == "viruses") %>% 
+  filter(is_phage == "false") # filter out phages
+
+# Calculate percentage of viral reads per sample
+viral_percentages <- virus_data %>%
+  drop_na(base_sample) %>% 
+  group_by(sample_name, base_sample, library_prep) %>%
+  summarise(
+    viral_nt_count = sum(nt_count, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sample_totals, by = c("base_sample","library_prep")) %>%
+  mutate(
+    viral_nt_percent = (viral_nt_count / total_nt_count) * 100,
+    # Replace NaN and Inf with NA
+    viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent))
+
+viral_summary = viral_percentages %>% 
+  select(base_sample, library_prep, viral_nt_count, viral_nt_percent) %>% 
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(viral_nt_count, viral_nt_percent),
+    names_glue = "{.value}_{library_prep}"
+  )
+
+# join viral calculations to summary table
+seq_metrics_summary_1 = seq_metrics_summary_1 %>% 
+  left_join(viral_summary, by = "base_sample","library_prep")
+seq_metrics_summary_1
+
+
+# Make table pretty
+seq_metrics_summary_1 %>%
+  mutate(
+    passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
+    passed_filters_ngs = (passed_filters_NGS / total_reads_NGS) * 100
+  ) %>% 
+  select(base_sample, total_reads_NGS, total_reads_MSSPE, passed_filters_ngs, passed_filters_msspe, compression_ratio_NGS, compression_ratio_MSSPE, viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>% 
+  arrange(desc(viral_nt_percent_MSSPE)) %>% 
+  rename(
+    "Sample" = base_sample,
+    "Reads (MSSPE)" = total_reads_MSSPE,
+    "Reads (NGS)" = total_reads_NGS,
+    "Passed Filter % (MSSPE)" = passed_filters_msspe,
+    "Passed Filter % (NGS)" = passed_filters_ngs,
+    "DCR (NGS)" = compression_ratio_NGS,
+    "DCR (MSSPE)" = compression_ratio_MSSPE,
+    "Viral Reads % (MSSPE)" = viral_nt_percent_MSSPE,
+    "Viral Reads % (NGS)" = viral_nt_percent_NGS
+  ) %>% 
+  kable(
+    format = "latex", 
+    caption = "Experiment 1: Shallow Sequencing",
+    digits = 2,
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+  )
+
+# join viral calculations to summary table
+seq_metrics_summary_2 = seq_metrics_summary_2 %>% 
+  left_join(viral_summary, by = "base_sample","library_prep")
+
+
+seq_metrics_summary_2 %>%
+  mutate(
+    passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
+    passed_filters_ngs = (passed_filters_NGS / total_reads_NGS) * 100
+  ) %>% 
+  select(base_sample, total_reads_NGS, total_reads_MSSPE, passed_filters_ngs, passed_filters_msspe, compression_ratio_NGS, compression_ratio_MSSPE, viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>% 
+  arrange(desc(viral_nt_percent_MSSPE)) %>% 
+  rename(
+    "Sample" = base_sample,
+    "Reads (MSSPE)" = total_reads_MSSPE,
+    "Reads (NGS)" = total_reads_NGS,
+    "Passed Filter % (MSSPE)" = passed_filters_msspe,
+    "Passed Filter % (NGS)" = passed_filters_ngs,
+    "DCR (NGS)" = compression_ratio_NGS,
+    "DCR (MSSPE)" = compression_ratio_MSSPE,
+    "Viral Reads % (MSSPE)" = viral_nt_percent_MSSPE,
+    "Viral Reads % (NGS)" = viral_nt_percent_NGS
+  ) %>% 
+  kable(
+    format = "latex", 
+    caption = "Experiment 2: Deep Sequencing",
+    digits = 2,
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+  )
+
+```
+
+```{r}
+# Wilcoxon signed rank test to measure differences between library preps
+
+
+```
+
+
+```{r}
+#seq metrics ALL
+seq_metrics_tbl = sample_metadata %>% 
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(!base_sample %in% c("s5-2")) %>% 
+  mutate(
+    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+  )
+
+seq_metrics_summary = seq_metrics_tbl %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters),
+    names_glue = "{.value}_{library_prep}"
+  ) 
+
+seq_metrics_tbl %>% 
+    group_by(library_prep) %>%
+    summarize(mean_reads = mean(total_reads),
+              mean_reads_sub = mean(total_reads_sub))
+
+seq_metrics_tbl_long <- seq_metrics_tbl %>%
+  pivot_longer(
+    cols = c(total_reads, total_reads_sub, passed_filters),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(metric = factor(metric, levels = c("total_reads", "total_reads_sub", "passed_filters")),
+         value = value / 1e6,
+    metric = recode(
+      metric,
+      "total_reads" = "Total reads",
+      "total_reads_sub" = "Subsampled reads",
+      "passed_filters" = "Reads passed filters"
+    )
+  )
+
+plot_data <- seq_metrics_tbl_long %>%
+  group_by(library_prep, metric) %>%
+  summarize(mean_value = mean(value), .groups = "drop")
+
+overall_barplot = ggplot(plot_data, aes(x = library_prep, y = mean_value, fill = metric)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7, linewidth = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Total reads" = "#3C8DBC",   # professional blue
+      "Reads passed filters" = "#7F8C8D", # neutral gray
+      "Subsampled reads" = "#BDC3C7"      # light gray for secondary metric
+    ),
+    name = ""
+  ) + 
+  labs(
+    title = "a",
+    x = "",
+    y = "Reads (millions)"
+  ) +
+  theme_minimal()
+
+overall_barplot
+```
+
+```{r}
+library(ggnewscale)
+library(RColorBrewer)
+
+# Create boxplot for viral NT percentage by control status
+mean_df_viral_perc <- viral_percentages %>%
+  group_by(library_prep) %>%
+  summarise(mean_value = mean(viral_nt_percent, na.rm = TRUE))
+
+viral_summary_wilcox = viral_summary %>% 
+    mutate(
+    viral_nt_percent_NGS = replace_na(viral_nt_percent_NGS, 0), # set NAs to 0 for non detections
+    viral_nt_percent_NGS   = replace_na(viral_nt_percent_NGS, 0), # set NAs to 0 for non detections
+    )
+
+# Paired Wilcoxon test across all samples
+wilcox_viral_perc <- wilcox.test(
+  viral_summary_wilcox$viral_nt_percent_NGS,
+  viral_summary$viral_nt_percent_MSSPE,
+  paired = TRUE,
+  alternative = "two.sided" 
+)
+
+pval_viral_perc <- wilcox_viral_perc$p.value
+
+
+# get stupid color schemes so I cant make it continuous
+blues_palette <- brewer.pal(9, "Blues")  # Get a blues palette with 9 colors
+reds_palette <- brewer.pal(9, "Reds")  # Get a reds palette with 9 colors
+
+library_prep_levels <- levels(factor(viral_percentages$library_prep))
+
+
+viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt_percent)) +
+  geom_boxplot(outlier.fill = "white", outlier.alpha = 0.5) +
+  geom_jitter(
+    data = subset(viral_percentages, library_prep == "MSSPE"),
+    aes(color = viral_nt_percent),
+    width = 0.1, alpha = 0.7, size = 1.8
+  ) +
+  scale_color_gradientn(colors = blues_palette) +
+  #scale_color_viridis(option = "plasma", direction = -1, limits = c(0, max(viral_percentages$viral_nt_percent))) +
+  new_scale_color() +
+  geom_jitter(
+    data = subset(viral_percentages, library_prep == "NGS"),
+    aes(color = viral_nt_percent),
+    width = 0.1, alpha = 0.7, size = 1.8
+  ) + 
+  scale_color_gradientn(colors = reds_palette) +
+  #scale_color_viridis(option = "D", direction = -1, limits = c(0, max(viral_percentages$viral_nt_percent))) +
+  annotate("text", x = mean(1:length(library_prep_levels)), y = max(viral_percentages$viral_nt_percent, na.rm = TRUE) * 1.1,
+           label = paste0("Wilcoxon p = ", signif(pval_viral_perc, 3)),
+           fontface = "italic", size = 4) +
+  stat_summary(fun = median, geom = "text", aes(label = round(..y.., 1)),
+               vjust = -0.5, color = "black", fontface = "bold", size = 3) +
+  geom_segment(data = mean_df_viral_perc,
+               aes(x = as.numeric(library_prep) - 0.3,
+                   xend = as.numeric(library_prep) + 0.3,
+                   y = mean_value, yend = mean_value),
+               linetype = "dotted", color = "black") +
+  geom_text(data = mean_df_viral_perc,
+            aes(x = library_prep, y = mean_value, label = paste0("μ: ", round(mean_value, 1))),
+            vjust = -1, color = "black", size = 3.2, fontface = "italic") +
+  theme_bw() +
+  labs(
+    title = "b",
+    x = "",
+    y = "% Viral Reads"
+  ) +
+  theme(
+    #axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+    )
+
+
+viral_nt_boxplot
+```
+
+```{r}
+horizontal_space <- plot_spacer() + plot_layout(widths = c(0.2))
+
+combined_boxplots = (overall_barplot | horizontal_space | viral_nt_boxplot) +
+  plot_layout(ncol = 3, widths = c(1.5, 0.5, 1.5))
+
+combined_boxplots
+```
+

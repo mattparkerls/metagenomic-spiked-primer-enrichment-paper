@@ -1,0 +1,69 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(kableExtra)
+```
+
+
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+primer_data <- read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/primer_data.csv", stringsAsFactors = TRUE)
+
+primer_tbl = primer_data %>% 
+  mutate(
+    primer_length = 15, 
+    num_prim_kb = round(num_prim_kb, 2),
+    num_ref_kb = round(num_ref_kb, 2),
+    virus = recode(virus,
+      `pastv` = "PAstV",
+      `ev-g` = "EV-G",
+      `hpv18` = "HPV18",
+      `pbov` = "PBoV",
+      `pcv` = "PCV",
+      `psapev` = "PSapeV",
+      `ptev` = "PTeV",
+      `pkv` = "PKV",
+      `psapov` = "PSapoV",
+    )
+  ) %>% 
+  arrange(virus) %>% 
+  select(virus, primer_length, num_primers, num_fwd, num_rev, num_refs, num_prim_kb, num_ref_kb) %>% 
+  rename(
+    "Primer length (nt)" = primer_length,
+    "Virus" = virus,
+    "Forward" = num_fwd,
+    "Reverse" = num_rev,
+    "References" = num_refs,
+    "Primers / kb genome" = num_prim_kb,
+    "Refs / kb genome" = num_ref_kb,
+    "Total Primers" = num_primers,
+  ) %>% 
+  kable(
+    format = "latex",  # or "latex" if using LaTeX
+    caption = "List of primers designed for MSSPE-based enrichment"
+  ) %>%
+  kable_styling(
+    full_width = TRUE,
+    position = "center",
+    #bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+
+primer_tbl
+```
+
+

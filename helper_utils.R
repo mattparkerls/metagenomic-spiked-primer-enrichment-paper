@@ -119,8 +119,18 @@ process_csv_file <- function(file_path) {
   return(data)
 }
 
+# Function to calculate overdispersion
+overdisp_fun <- function(model) {
+  rdf <- df.residual(model)
+  rp <- residuals(model, type = "pearson")
+  Pearson.chisq <- sum(rp^2)
+  ratio <- Pearson.chisq / rdf
+  pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE)
+  c(chisq=Pearson.chisq, ratio=ratio, rdf=rdf, p=pval)
+}
+
 # ---- DOWNSAMPLING SIMULATION ----
-simulate_downsampling <- function(count_mat, depths, n_reps, patterns, detection_thresholds) {
+simulate_downsampling <- function(count_mat, depths, n_reps) {
     taxa <- rownames(count_mat)
     samples <- colnames(count_mat)
     
@@ -131,6 +141,7 @@ simulate_downsampling <- function(count_mat, depths, n_reps, patterns, detection
         # Rarefy each sample using vegan::rrarefy
         rarefied_list <- lapply(samples, function(s) {
           x <- count_mat[, s]
+          x[is.na(x)] <- 0           # replace NAs
           total_reads <- sum(x, na.rm = TRUE)
           if (total_reads == 0) return(rep(0, length(x)))
           as.numeric(rrarefy(matrix(x, nrow = 1), sample = min(depth, total_reads)))
@@ -157,31 +168,59 @@ simulate_downsampling <- function(count_mat, depths, n_reps, patterns, detection
         sim_df <- sim_df %>%
           left_join(sample_meta, by = c("sample" = "sample_name"))
         
-        # --- Pathogen detection using pattern matching ---
-        for (th in detection_thresholds) {
-          for (vname in names(patterns)) {
-            
-            # build col name: e.g. detect_SapovirusGroup_ge_5
-            col_name <- paste0("detect_", vname, "_ge_", th)
-            
-            # find all matching rows using regex
-            match_rows <- grepl(patterns[[vname]], rownames(rarefied), ignore.case = TRUE)
-            
-            if (any(match_rows)) {
-              # sum logical detection across all matched taxa (≥ threshold)
-              sim_df[[col_name]] <- as.numeric(colSums(rarefied[match_rows, , drop = FALSE] >= th) > 0)
-            } else {
-              sim_df[[col_name]] <- 0
-            }
-          }
-        }
-        
-        
         results[[length(results) + 1]] <- sim_df
       }
     }
     
     bind_rows(results)
+}
+
+# Simulate downsampling for specific targets
+simulate_downsampling_targets <- function(count_mat, depths, n_reps, patterns) {
+  taxa <- rownames(count_mat)
+  samples <- colnames(count_mat)
+  
+  results <- list()
+  
+  for (depth in depths) {
+    for (rep in seq_len(n_reps)) {
+      
+      # Rarefy each sample
+      rarefied_list <- lapply(samples, function(s) {
+        x <- count_mat[, s]
+        x[is.na(x)] <- 0           # replace NAs
+        total_reads <- sum(x)
+        if (total_reads == 0) return(rep(0, length(x)))
+        as.numeric(vegan::rrarefy(x, sample = min(depth, total_reads)))
+      })
+      
+      rarefied <- do.call(cbind, rarefied_list)
+      colnames(rarefied) <- samples
+      rownames(rarefied) <- taxa
+      
+      # Build base results table
+      sim_df <- tibble(
+        sample = samples,
+        depth = depth,
+        rep = rep
+      ) %>%
+        left_join(sample_meta, by = c("sample" = "sample_name"))
+      
+      # Optional: calculate total reads per target group for manual filtering later
+      for (vname in names(patterns)) {
+        match_rows <- grepl(patterns[[vname]], rownames(rarefied), ignore.case = TRUE)
+        if (any(match_rows)) {
+          sim_df[[vname]] <- colSums(rarefied[match_rows, , drop = FALSE])
+        } else {
+          sim_df[[vname]] <- 0
+        }
+      }
+      
+      results[[length(results) + 1]] <- sim_df
+    }
+  }
+  
+  bind_rows(results)
 }
 
   
