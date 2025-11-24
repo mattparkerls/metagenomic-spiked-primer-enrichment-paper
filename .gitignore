@@ -9,6 +9,11 @@
 /msspe_regression/
 *.nb.html
 *.tex
+*.html
+*.pdf
+*.tex
+*_cache/
+*_files/
 
 # History files
 .Rhistory
