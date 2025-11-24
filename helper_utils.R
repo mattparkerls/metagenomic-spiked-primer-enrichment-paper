@@ -223,4 +223,78 @@ simulate_downsampling_targets <- function(count_mat, depths, n_reps, patterns) {
   bind_rows(results)
 }
 
+# ---- SAMPLE METADATA PARSING ----
+# Create sample metadata from sequencing metrics
+# Parses sample naming conventions across 3 experiments and extracts:
+# - library_prep (MSSPE vs NGS)
+# - experiment number (1, 2, or 3)
+# - base_sample name
+# - sample_type (environmental vs slurry)
+create_sample_metadata <- function(seq_metrics, pond_samples = c("s9","s10","s19","s20")) {
+  seq_metrics %>% 
+    mutate(
+      # Library prep: MSSPE if ends with "_M"
+      library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+      
+      # Remove the _M suffix to get the core sample identifier
+      core = str_remove(sample_name, "_M$"),
+      
+      # Detect experiment 3 first (Cxxx_LPx pattern)
+      is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+      
+      # Base: first sample ID (e.g. S10, PC1)
+      base = str_extract(core, "^[A-Za-z]+\\d+"),
+      
+      # Append -2 or -3 suffix only if not experiment 3
+      suffix = case_when(
+        !is_exp3 & str_detect(core, "_2$") ~ "-2",
+        !is_exp3 & str_detect(core, "_3$") ~ "-3",
+        TRUE ~ ""
+      ),
+      
+      # Lowercase base sample name
+      base_sample = tolower(paste0(base, suffix)),
+      
+      # Mark which experiment number
+      experiment = case_when(
+        is_exp3 ~ 3,
+        str_detect(core, "_3$") ~ 2,
+        TRUE ~ 1
+      ),
+      
+      # Group slurry vs environmental samples
+      sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry")
+    )
+}
+
+# ---- VIRAL NAME GROUPING ----
+# Add standardized viral pathogen name groups to virus data
+# Maps species names to standardized abbreviations (PBoV, PCV, PKV, etc.)
+add_viral_name_groups <- function(virus_data) {
+  # Define regex patterns for viral species grouping
+  ent_v = "Enterovirus G"
+  circo_v = "Circovirus"
+  sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
+  tes_v = "Teschovirus"
+  aich_v = "Aichivirus"
+  astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
+  hpv18 = "Alphapapillomavirus"
+  sapel_v = "Sapelovirus"
+  boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
+  
+  virus_data %>% 
+    mutate(name_group = case_when(
+      str_detect(name, regex(hpv18, ignore_case = TRUE)) ~ "HPV18",
+      str_detect(name, regex(aich_v, ignore_case = TRUE)) ~ "PKV",
+      str_detect(name, regex(tes_v, ignore_case = TRUE)) ~ "PTeV",
+      str_detect(name, regex(circo_v, ignore_case = TRUE)) ~ "PCV",
+      str_detect(name, regex(sapo_v, ignore_case = TRUE)) ~ "PSapeV",
+      str_detect(name, regex(sapel_v, ignore_case = TRUE)) ~ "PSapoV",
+      str_detect(name, regex(ent_v, ignore_case = TRUE)) ~ "EV-G",
+      str_detect(name, regex(boc_v, ignore_case = TRUE)) ~ "PBoV", 
+      str_detect(name, regex(astr_v, ignore_case = TRUE)) ~ "PAstV",
+      TRUE ~ name  # Keep original name if no pattern matches
+    ))
+}
+
   

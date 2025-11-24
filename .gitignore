@@ -15,6 +15,9 @@
 *_cache/
 *_files/
 
+# github
+.github/
+
 # History files
 .Rhistory
 .Rapp.history

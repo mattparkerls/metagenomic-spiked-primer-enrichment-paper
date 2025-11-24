@@ -39,82 +39,42 @@ seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/da
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
-# separate slurry from pond samples
-pond_samples = c("s9","s10","s19","s20")
-
-# Create a metadata dataframe to merge with taxon data
-sample_metadata = seq_metrics %>% 
-  select(sample_name, water_control, infection_class) %>% 
-  mutate(
-  # Library prep: MSSPE if ends with "_M"
-  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
-
-  # Remove the _M suffix to get the core sample identifier
-  core = str_remove(sample_name, "_M$"),
-  # Detect experiment 3 first (Cxxx_LPx)
-  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
-
-  # Base: first sample ID (e.g. S10, PC1)
-  base = str_extract(core, "^[A-Za-z]+\\d+"),
-
-  # Append -2 or -3 only if not exp3
-  suffix = case_when(
-    !is_exp3 & str_detect(core, "_2$") ~ "-2", # 
-    !is_exp3 & str_detect(core, "_3$") ~ "-3", #
-    TRUE ~ ""
-  ),
-  
-  # lowercase base sample name
-  base_sample = tolower(base),
-  
-  # mark which experiment number
-  experiment = case_when(
-    is_exp3 ~ 3,
-    str_detect(core, "_3$") ~ 2,
-    TRUE ~ 1
-  ),
-  # group slurry vs environmental samples
-    sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry")
-  
-) %>%
-select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics) %>%
+  select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
-# get hpv data from experiment 1 & 2
+# Extract HPV data from experiments 1 & 2 before filtering
 hpv_data = merged_data %>% 
   filter(experiment == 1 | experiment == 2) %>% 
   filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE)))
 
-# kobuvirus data from experiment 1 to compare to experiment 3
-pkv_data = merged_data %>% 
-  filter(experiment == 1) %>% 
-  filter(str_detect(name, regex("Aichivirus", ignore_case = TRUE)))
+# Extract mNGS kobuvirus data from experiment 1 to compare to experiment 3
+#pkv_data = merged_data %>% 
+  #filter(experiment == 1) %>% 
+  #filter(str_detect(name, regex("Aichivirus", ignore_case = TRUE)))
 
-# remove MSSPE libraries that are also experiment 1 (after we have already pulled the hpv rows)
-merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
+# Remove MSSPE libraries from experiment 1 (after extracting HPV data above)
+# Experiment 1 MSSPE libraries are excluded from main analysis
+#merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
   filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
-  #filter(experiment == 1) %>% 
   filter(water_control == "No") %>%   # filter out Negative Controls
   filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
-  filter(infection_class != "Definite")  # filter out positive controls
-  #filter(sample_type == "slurry") # filter to only slurry
-  
-# add hpv & kobuvirus data to the rest of the data
-all_data_species = all_data_species %>% 
-  add_row(hpv_data) %>% 
-  add_row(pkv_data)
+  filter(infection_class != "Definite") %>%   # filter out positive control samples
+  add_row(hpv_data)  # but keep hpv data 
+
 ```
 
 
 ```{r}
-# targets to filter to the genus level
+# Define viral targets to filter to the genus level
 genus_targets = c(
   "Bocaparvovirus",
   "Sapelovirus",
@@ -132,73 +92,42 @@ genus_targets = c(
   "Alphainfluenzavirus",
   "Henipavirus")
 
-# assign these to group species
+# Assign standardized names for viral targets
 name_targets = c(
-  "PBoV", # porcine bocavirus
-  "PCV", # porcine circovirus 2
-  "PKV", # porcine kobuvirus / aichivirus C
-  "EV-G", # porcine enterovirus G
-  "PTeV", # porcine teschovirus A
-  "PAstV", # porcine astrovirus 4
-  "PSapoV", # porcine sapovirus
-  "PSapeV", # porcine sapelovirus
-  "HPV18" # humanpapillomavirus 7/18
-  #"PToV*" # porcine torovirus
+  "PBoV",   # Porcine bocavirus
+  "PCV",    # Porcine circovirus 2
+  "PKV",    # Porcine kobuvirus / Aichivirus C
+  "EV-G",   # Porcine enterovirus G
+  "PTeV",   # Porcine teschovirus A
+  "PAstV",  # Porcine astrovirus 4
+  "PSapoV", # Porcine sapovirus
+  "PSapeV", # Porcine sapelovirus
+  "HPV18"   # Human papillomavirus 7/18
 )
 
-# specific names that should group together
-ent_v = "Enterovirus G"
-circo_v = "Circovirus"
-sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
-tes_v = "Teschovirus"
-aich_v = "Aichivirus"
-astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
-hpv18 = "Alphapapillomavirus"
-sapel_v = "Sapelovirus"
-boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
-#toro_v = "torovirus"
-
+# Filter to viral category and exclude phages
 all_viruses <- all_data_species %>%
   filter(category == "viruses") %>% 
-  filter(is_phage == "false")  # filter out phages
+  filter(is_phage == "false")
 
-# add name group column
-all_viruses = all_viruses %>% 
-  mutate(name_group = case_when(
-    str_detect(name, regex(hpv18, ignore_case = TRUE)) ~ "HPV18",
-    str_detect(name, regex(aich_v, ignore_case = TRUE)) ~ "PKV",
-    str_detect(name, regex(tes_v, ignore_case = TRUE)) ~ "PTeV",
-    str_detect(name, regex(circo_v, ignore_case = TRUE)) ~ "PCV",
-    str_detect(name, regex(sapo_v, ignore_case = TRUE)) ~ "PSapeV",
-    str_detect(name, regex(sapel_v, ignore_case = TRUE)) ~ "PSapoV",
-    str_detect(name, regex(ent_v, ignore_case = TRUE)) ~ "EV-G",
-    str_detect(name, regex(boc_v, ignore_case = TRUE)) ~ "PBoV", 
-    str_detect(name, regex(astr_v, ignore_case = TRUE)) ~ "PAstV",
-    #str_detect(name, regex(toro_v, ignore_case = TRUE)) ~ "PToV*", 
-    TRUE ~ name  # Keep original name if no pattern matches
-  ))
+# Add standardized name groups using helper function
+all_viruses = add_viral_name_groups(all_viruses)
 
-# Add genus columns to the dataframe
-#genus_data <- get_genus_info_batch(all_viruses$tax_id, batch_size = 100)
-
-# Combine with original dataframe
-#all_viruses <- cbind(all_viruses, genus_data)
-
-# for 0 rpm values
+# Small constant for log transformation of zero RPM values
 eps <- 0.1
 
-# filter to only the target viral species or genus
+# Filter to only the target viral species or genus
 only_viral_targets = all_viruses %>% 
   group_by(base_sample, library_prep, name_group) %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
   summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
   pivot_wider(
     names_from = library_prep,
     values_from = rpm_mean
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # set NAs to 0 for non detections
-    NGS   = replace_na(NGS, 0), # set NAs to 0 for non detections
+    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
     mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
     log2FC = log2(mean_rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
@@ -247,52 +176,41 @@ alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = log2FC))
 
 alltarget_boxplot
 ```
+
 Viral Enrichment w/o primers from experiment 1
 ```{r}
+# Create separate dataset for experiment 1 analysis
 merged_data_exp1 <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species_exp1 <- merged_data_exp1 %>%
   filter(tax_level == 1) %>% 
-  filter(experiment == 1) %>% #only experiment 1
-  filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
-  filter(infection_class != "Definite")
+  filter(experiment == 1) %>%  # Only experiment 1
+  filter(water_control == "No") %>%   # Exclude negative controls
+  filter(!base_sample %in% c("pc1","pc3")) %>%  # Exclude zymo fecal controls
+  filter(infection_class != "Definite")  # Exclude positive controls
 
+# Filter to viral category and exclude phages
 all_viruses_exp1 <- all_data_species_exp1 %>%
   filter(category == "viruses") %>% 
-  filter(is_phage == "false")  # filter out phages
+  filter(is_phage == "false")
 
-# add name group column
-all_viruses_exp1 = all_viruses_exp1 %>% 
-  mutate(name_group = case_when(
-    str_detect(name, regex(aich_v, ignore_case = TRUE)) ~ "PKV",
-    str_detect(name, regex(tes_v, ignore_case = TRUE)) ~ "PTeV",
-    str_detect(name, regex(circo_v, ignore_case = TRUE)) ~ "PCV",
-    str_detect(name, regex(sapo_v, ignore_case = TRUE)) ~ "PSapeV",
-    str_detect(name, regex(sapel_v, ignore_case = TRUE)) ~ "PSapoV",
-    str_detect(name, regex(ent_v, ignore_case = TRUE)) ~ "EV-G",
-    str_detect(name, regex(boc_v, ignore_case = TRUE)) ~ "PBoV", 
-    str_detect(name, regex(astr_v, ignore_case = TRUE)) ~ "PAstV",
-    TRUE ~ name  # Keep original name if no pattern matches
-  ))
+# Add standardized name groups using helper function
+all_viruses_exp1 = add_viral_name_groups(all_viruses_exp1)
 
-# for 0 rpm values
-eps <- 0.1
-
-# filter to only the target viral species or genus
+# Filter to only the target viral species or genus
 only_viral_targets_exp1 = all_viruses_exp1 %>% 
   group_by(base_sample, library_prep, name_group) %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
   summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
   pivot_wider(
     names_from = library_prep,
     values_from = rpm_mean
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # set NAs to 0 for non detections
-    NGS   = replace_na(NGS, 0), # set NAs to 0 for non detections
+    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
     mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
     log2FC = log2(mean_rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
@@ -451,8 +369,8 @@ calc_cov_stats <- function(file) {
     prep = ifelse(str_detect(file, "_m"), "MSSPE", "NGS"),
     sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
     ref_length = nrow(df),
-    breadth_1x = mean(df$Coverage > 0) * 100,
-    mean_depth = mean(df$Coverage)
+    breadth_1x = mean(df$Coverage > 0) * 100,  # Percentage of genome covered at ≥1x depth
+    mean_depth = mean(df$Coverage)  # Mean coverage depth across genome
   )
 }
 
@@ -461,7 +379,6 @@ cov_summary <- map_dfr(cov_files, calc_cov_stats)
 
 # Pivot wider for paired comparison
 paired_tbl <- cov_summary %>%
-  #filter(sample_type == "slurry") %>% # filtering by sample type
   select(virus, base_sample, prep, breadth_1x, mean_depth) %>%
   pivot_wider(
     names_from = prep,
@@ -469,8 +386,8 @@ paired_tbl <- cov_summary %>%
     names_glue = "{.value}_{prep}"
   ) %>%
   mutate(
-    enrichment_breadth = breadth_1x_MSSPE - breadth_1x_NGS,
-    enrichment_depth   = mean_depth_MSSPE - mean_depth_NGS,
+    enrichment_breadth = breadth_1x_MSSPE - breadth_1x_NGS,  # Absolute percentage point increase
+    enrichment_depth   = mean_depth_MSSPE - mean_depth_NGS,  # Absolute depth increase
     virus = recode(virus,
       `astrov` = "PAstV",
       `etvg` = "EV-G",
@@ -485,7 +402,7 @@ paired_tbl <- cov_summary %>%
 
 # Summary table (1 row per metric)
 wilcox_summary = paired_tbl %>% 
-  replace_na(list(breadth_1x_MSSPE = 0, breadth_1x_NGS = 0, enrichment_breadth = 0)) %>% # some samples had reads but no coverage
+  replace_na(list(breadth_1x_MSSPE = 0, breadth_1x_NGS = 0, enrichment_breadth = 0)) %>% # Some samples had reads but no coverage
   group_by(virus) %>%
   summarise(
     mean_ngs = round(mean(breadth_1x_NGS, na.rm = TRUE),2),
@@ -591,17 +508,16 @@ ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
 ```{r}
 # Overall Enrichment (non-paired)
 
-
 # All viruses & enrichment 
 overall_tbl = all_viruses %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
-  filter(name_group != "PToV*") %>% # remove torovirus
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
+  filter(name_group != "PToV*") %>% # Remove torovirus
   group_by(name_group, library_prep) %>% 
   summarize(rpm_mean = mean(nt_rpm, na.rm = TRUE), .groups = "drop")
 
 overall_tbl_summary = all_viruses %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # filter to targeted viruses
-  filter(name_group != "PToV*") %>% # remove torovirus
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
+  filter(name_group != "PToV*") %>% # Remove torovirus
   group_by(base_sample, name_group, library_prep) %>% 
   summarize(rpm_mean = mean(nt_rpm, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(
@@ -609,8 +525,8 @@ overall_tbl_summary = all_viruses %>%
     values_from = rpm_mean
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # set NAs to 0 for non detections
-    NGS   = replace_na(NGS, 0), # set NAs to 0 for non detections
+    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
     mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
     log2FC = log2(mean_rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)

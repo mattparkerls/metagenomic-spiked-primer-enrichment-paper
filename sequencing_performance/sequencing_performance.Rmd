@@ -44,45 +44,11 @@ Sample Taxon Reports
 csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
 seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
 
-# separate slurry from pond samples
-pond_samples = c("s9","s10","s19","s20")
-
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
-# Create a metadata dataframe to merge with taxon data
-sample_metadata = seq_metrics %>% 
-  select(sample_name, water_control, infection_class, total_reads, subsampled_fraction, passed_filters, compression_ratio) %>% 
-  mutate(
-  # Library prep: MSSPE if ends with "_M"
-  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
-
-  # Remove the _M suffix to get the core sample identifier
-  core = str_remove(sample_name, "_M$"),
-  # Detect experiment 3 first (Cxxx_LPx)
-  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
-
-  # Base: first sample ID (e.g. S10, PC1)
-  base = str_extract(core, "^[A-Za-z]+\\d+"),
-
-  # Append -2 or -3 only if not exp3
-  suffix = case_when(
-    !is_exp3 & str_detect(core, "_2$") ~ "-2",
-    !is_exp3 & str_detect(core, "_3$") ~ "-3",
-    TRUE ~ ""
-  ),
-
-  base_sample = tolower(paste0(base, suffix)),
-
-  experiment = case_when(
-    is_exp3 ~ 3,
-    str_detect(core, "_3$") ~ 2,
-    TRUE ~ 1
-  ),
-  # group slurry vs environmental samples
-    sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry")
-) %>%
-select(sample_name, base_sample, total_reads, subsampled_fraction, passed_filters, library_prep, experiment, water_control, infection_class, sample_type, compression_ratio)
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
@@ -109,17 +75,18 @@ species_data_filtered = species_data %>%
 
 
 ```{r}
-seq_metrics_tbl_1 = sample_metadata %>% 
+# Experiment 1
+seq_metrics_exp1 = sample_metadata %>% 
   #left_join(sample_metadata, by = "sample_name") %>% 
-  filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(water_control == "No") %>%   # Filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # Filter out positive controls
   filter(!base_sample %in% c("s5-2")) %>% 
   filter(experiment == 1) %>% 
   mutate(
-    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+    total_reads_sub = total_reads * subsampled_fraction # Subsample total reads according to subsample fraction
   )
 
-seq_metrics_summary_1 = seq_metrics_tbl_1 %>%
+seq_metrics_summary_1 = seq_metrics_exp1 %>%
   drop_na(base_sample) %>%
   select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
   pivot_wider(
@@ -128,18 +95,18 @@ seq_metrics_summary_1 = seq_metrics_tbl_1 %>%
     names_glue = "{.value}_{library_prep}"
   ) 
 
-#Experiment 2 & 3
-seq_metrics_tbl_2 = sample_metadata %>% 
+# Experiment 3
+seq_metrics_exp3 = sample_metadata %>% 
   #left_join(sample_metadata, by = "sample_name") %>% 
-  filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(infection_class != "Definite") %>%  # filter out positive controls
+  filter(water_control == "No") %>%   # Filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # Filter out positive controls
   filter(!base_sample %in% c("s5-2")) %>% 
   filter(experiment == 3) %>% 
   mutate(
-    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+    total_reads_sub = total_reads * subsampled_fraction # Subsample total reads according to subsample fraction
   )
 
-seq_metrics_summary_2 = seq_metrics_tbl_2 %>%
+seq_metrics_summary_2 = seq_metrics_exp3 %>%
   drop_na(base_sample) %>%
   select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
   pivot_wider(
@@ -165,10 +132,10 @@ sample_totals <- species_data %>%
     .groups = "drop"
   )
 
-# Extract viral category data
+# Extract viral category data (excluding bacteriophages)
 virus_data <- species_data %>%
   filter(category == "viruses") %>% 
-  filter(is_phage == "false") # filter out phages
+  filter(is_phage == "false") # Filter out phages
 
 # Calculate percentage of viral reads per sample
 viral_percentages <- virus_data %>%
@@ -181,7 +148,7 @@ viral_percentages <- virus_data %>%
   left_join(sample_totals, by = c("base_sample","library_prep")) %>%
   mutate(
     viral_nt_percent = (viral_nt_count / total_nt_count) * 100,
-    # Replace NaN and Inf with NA
+    # Replace NaN and Inf with NA (handles division by zero)
     viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent))
 
 viral_summary = viral_percentages %>% 
@@ -192,13 +159,13 @@ viral_summary = viral_percentages %>%
     names_glue = "{.value}_{library_prep}"
   )
 
-# join viral calculations to summary table
+# Join viral calculations to summary tables
 seq_metrics_summary_1 = seq_metrics_summary_1 %>% 
   left_join(viral_summary, by = "base_sample","library_prep")
 seq_metrics_summary_1
 
 
-# Make table pretty
+# Format Experiment 1 table for publication
 seq_metrics_summary_1 %>%
   mutate(
     passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
@@ -228,11 +195,12 @@ seq_metrics_summary_1 %>%
     position = "center",
   )
 
-# join viral calculations to summary table
+# Join viral calculations to Experiment 3 summary table
 seq_metrics_summary_2 = seq_metrics_summary_2 %>% 
   left_join(viral_summary, by = "base_sample","library_prep")
 
 
+# Format Experiment 3 table for publication
 seq_metrics_summary_2 %>%
   mutate(
     passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
@@ -272,16 +240,16 @@ seq_metrics_summary_2 %>%
 
 
 ```{r}
-#seq metrics ALL
-seq_metrics_tbl = sample_metadata %>% 
-  filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(infection_class != "Definite") %>%  # filter out positive controls
+# Sequencing metrics ALL experiments
+seq_metrics_all = sample_metadata %>% 
+  filter(water_control == "No") %>%   # Filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # Filter out positive controls
   filter(!base_sample %in% c("s5-2")) %>% 
   mutate(
-    total_reads_sub = total_reads * subsampled_fraction # subsample total reads according to subsample fraction
+    total_reads_sub = total_reads * subsampled_fraction # Subsample total reads according to subsample fraction
   )
 
-seq_metrics_summary = seq_metrics_tbl %>%
+seq_metrics_summary = seq_metrics_all %>%
   drop_na(base_sample) %>%
   select(base_sample, library_prep, total_reads, passed_filters) %>%
   pivot_wider(
@@ -290,19 +258,19 @@ seq_metrics_summary = seq_metrics_tbl %>%
     names_glue = "{.value}_{library_prep}"
   ) 
 
-seq_metrics_tbl %>% 
+seq_metrics_all %>% 
     group_by(library_prep) %>%
     summarize(mean_reads = mean(total_reads),
               mean_reads_sub = mean(total_reads_sub))
 
-seq_metrics_tbl_long <- seq_metrics_tbl %>%
+seq_metrics_all_long <- seq_metrics_all %>%
   pivot_longer(
     cols = c(total_reads, total_reads_sub, passed_filters),
     names_to = "metric",
     values_to = "value"
   ) %>%
   mutate(metric = factor(metric, levels = c("total_reads", "total_reads_sub", "passed_filters")),
-         value = value / 1e6,
+         value = value / 1e6, # Convert to millions of reads
     metric = recode(
       metric,
       "total_reads" = "Total reads",
@@ -311,7 +279,7 @@ seq_metrics_tbl_long <- seq_metrics_tbl %>%
     )
   )
 
-plot_data <- seq_metrics_tbl_long %>%
+plot_data <- seq_metrics_all_long %>%
   group_by(library_prep, metric) %>%
   summarize(mean_value = mean(value), .groups = "drop")
 
