@@ -39,59 +39,39 @@ seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/da
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
+# Pond sample names
+pond_samples = c("s9","s10","s19","s20")
+
 # Create sample metadata using helper function
-sample_metadata = create_sample_metadata(seq_metrics) %>%
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples) %>%
   select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
-# Extract HPV data from experiments 1 & 2 before filtering
+# Extract HPV data before filtering
 hpv_data = merged_data %>% 
   filter(experiment == 1 | experiment == 2) %>% 
   filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE)))
-
-# Extract mNGS kobuvirus data from experiment 1 to compare to experiment 3
-#pkv_data = merged_data %>% 
-  #filter(experiment == 1) %>% 
-  #filter(str_detect(name, regex("Aichivirus", ignore_case = TRUE)))
-
-# Remove MSSPE libraries from experiment 1 (after extracting HPV data above)
-# Experiment 1 MSSPE libraries are excluded from main analysis
-#merged_data = merged_data %>% filter(!(experiment == 1 & library_prep == "MSSPE"))
+pcv_data = merged_data %>%
+  filter((experiment == 1 & library_prep == "MSSPE")) %>% 
+  filter(str_detect(name, regex("Circovirus sp.", ignore_case = TRUE)))
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
-  filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
+  filter(nt_rpm >= 1) %>% # so zeros don't skew comparison
+  #filter((experiment == 1 & library_prep == "NGS") | (experiment == 2 | experiment == 3)) %>% # exp 1 NGS libraries, and all exp 2 & 3
   filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
   filter(infection_class != "Definite") %>%   # filter out positive control samples
-  add_row(hpv_data)  # but keep hpv data 
+  add_row(hpv_data)# %>%   # but keep hpv data 
+  #add_row(pcv_data) # and pcv msspe data from exp 1
 
 ```
 
 
 ```{r}
-# Define viral targets to filter to the genus level
-genus_targets = c(
-  "Bocaparvovirus",
-  "Sapelovirus",
-  "Circovirus",
-  "Enterovirus",
-  "Teschovirus",
-  "Alphapapillomavirus",
-  "Sapovirus",
-  "Mamastrovirus",
-  "Kobuvirus",
-  "Asfivirus",
-  "Pestivirus",
-  "Aphthovirus",
-  "Betaarterivirus",
-  "Alphainfluenzavirus",
-  "Henipavirus")
-
 # Assign standardized names for viral targets
 name_targets = c(
   "PBoV",   # Porcine bocavirus
@@ -108,7 +88,8 @@ name_targets = c(
 # Filter to viral category and exclude phages
 all_viruses <- all_data_species %>%
   filter(category == "viruses") %>% 
-  filter(is_phage == "false")
+  filter(is_phage == "false") %>% 
+  filter(!str_detect(name, paste(c("Siphoviridae","Podoviridae","Myoviridae"), collapse = "|")))
 
 # Add standardized name groups using helper function
 all_viruses = add_viral_name_groups(all_viruses)
@@ -120,53 +101,55 @@ eps <- 0.1
 only_viral_targets = all_viruses %>% 
   group_by(base_sample, library_prep, name_group) %>% 
   filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
-  summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
+  summarize(rpm_sum = sum(nt_rpm, na.rm=TRUE), .groups="drop") %>% # sum rPM for each target
   pivot_wider(
     names_from = library_prep,
-    values_from = rpm_mean
+    values_from = rpm_sum
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
-    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
-    mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
-    log2FC = log2(mean_rpm_enrichment),
+    MSSPE = replace_na(MSSPE, 0.1), # Set NAs to 0.1 for non-detections
+    NGS   = replace_na(NGS, 0.1),   # Set NAs to 0.1 for non-detections
+    rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
+    log2FC = log2(rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
   arrange(desc(log2FC))
 
 # calculate average enrichment for all targets
 mean_enrich_overall = only_viral_targets %>% 
-  filter(name_group != "PToV*") %>% 
-  summarise(mean_log2FC = mean(log2FC), median_foldchange = median(mean_rpm_enrichment))
+  summarise(
+    mean_log2FC = mean(log2FC),
+    median_foldchange = median(rpm_enrichment),
+    mean_foldchange = mean(rpm_enrichment))
 
 mean_enrich_overall
 
 # calculate mean so we can add to the boxplot
 mean_df <- only_viral_targets %>%
   group_by(name_group) %>%
-  summarise(mean_value = mean(log2FC, na.rm = TRUE)) 
+  summarise(mean_value = mean(rpm_enrichment, na.rm = TRUE), median_value = median(rpm_enrichment, na.rm = TRUE)) 
 
 # plot fold change across all samples
-alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = log2FC)) +
+alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = rpm_enrichment)) +
   geom_boxplot(width = 0.8, outlier.shape = 21, outlier.fill = "white", alpha = 0.6, width = 0.6, color = "black") +
-  geom_jitter(width = 0.1, alpha = 0.5, size = 1.5, aes(colour = log2FC)) +
-  scale_color_viridis(option = "magma", direction = -1) +
+  scale_y_log10() +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#3C8DBC") +  # Professional blue
   geom_hline(yintercept = 0, linetype = "dashed") +
-  # dotted mean line
+  #dotted mean line
   geom_segment(
     data = mean_df,
     aes(x = as.numeric(name_group) - 0.3,
         xend = as.numeric(name_group) + 0.3,
         y = mean_value, yend = mean_value),
     inherit.aes = FALSE,
-    linetype = "dotted", color = "red", linewidth = 0.6
+    linetype = "dashed", color = "black", linewidth = 0.6
   ) +
-  geom_text(data = mean_df, aes(x = name_group, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "grey40", size = 3.2, fontface = "italic") +
+  geom_text(data = mean_df, aes(x = name_group, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "black", size = 3.2, fontface = "italic") +
   scale_x_discrete() +  # adds space between boxes for labels
   labs(
-    title = "Viral Enrichment",
+    title = "Viral Enrichment - All Experiments",
     x = "",
-    y = expression(Log[2]*" fold-enrichment"),
+    y = "Fold enrichment (log10)",
   ) +
   theme_bw() +
   theme(
@@ -176,6 +159,41 @@ alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = log2FC))
 
 alltarget_boxplot
 ```
+
+```{r}
+# Do calculations for reads/nt_count instead of rpm
+reads_summary = all_viruses %>% 
+  group_by(base_sample, library_prep, name_group) %>% 
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
+  summarize(reads_sum = sum(nt_count, na.rm=TRUE), .groups="drop") %>% # sum rPM for each target
+  pivot_wider(
+    names_from = library_prep,
+    values_from = reads_sum
+  ) %>%
+  mutate(
+    MSSPE = replace_na(MSSPE, 1), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 1),   # Set NAs to 0 for non-detections
+    reads_enrichment = (`MSSPE` + 1)/(`NGS` + 1),
+    log2FC = log2(reads_enrichment),
+    name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
+  ) %>% 
+  arrange(desc(log2FC))
+reads_summary
+
+overall_reads_enrichment = reads_summary %>%
+  group_by(name_group) %>%
+  summarize(
+    median_FC = median(reads_enrichment),
+    mean_FC   = mean(reads_enrichment),
+    median_log2FC = median(log2FC),
+    n_pairs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_log2FC))
+overall_reads_enrichment
+
+```
+
 
 Viral Enrichment w/o primers from experiment 1
 ```{r}
@@ -189,7 +207,8 @@ all_data_species_exp1 <- merged_data_exp1 %>%
   filter(experiment == 1) %>%  # Only experiment 1
   filter(water_control == "No") %>%   # Exclude negative controls
   filter(!base_sample %in% c("pc1","pc3")) %>%  # Exclude zymo fecal controls
-  filter(infection_class != "Definite")  # Exclude positive controls
+  filter(infection_class != "Definite")   # Exclude positive controls
+  #filter(nt_rpm >= 1) # rpm at least 1
 
 # Filter to viral category and exclude phages
 all_viruses_exp1 <- all_data_species_exp1 %>%
@@ -203,16 +222,16 @@ all_viruses_exp1 = add_viral_name_groups(all_viruses_exp1)
 only_viral_targets_exp1 = all_viruses_exp1 %>% 
   group_by(base_sample, library_prep, name_group) %>% 
   filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
-  summarize(rpm_mean = mean(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
+  summarize(rpm_sum = sum(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
   pivot_wider(
     names_from = library_prep,
-    values_from = rpm_mean
+    values_from = rpm_sum
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
-    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
-    mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
-    log2FC = log2(mean_rpm_enrichment),
+    MSSPE = replace_na(MSSPE, 0.1), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 0.1),   # Set NAs to 0 for non-detections
+    rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
+    log2FC = log2(rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
   arrange(desc(log2FC))
@@ -220,20 +239,20 @@ only_viral_targets_exp1 = all_viruses_exp1 %>%
 # calculate average enrichment for all targets
 mean_enrich_overall_exp1 = only_viral_targets_exp1 %>% 
   filter(name_group != "PToV*") %>% 
-  summarise(mean_log2FC = mean(log2FC), median_foldchange = median(mean_rpm_enrichment))
+  summarise(mean_log2FC = mean(log2FC), median_foldchange = median(rpm_enrichment))
 
 mean_enrich_overall_exp1
 
 # calculate mean so we can add to the boxplot
 mean_df_exp1 <- only_viral_targets_exp1 %>%
   group_by(name_group) %>%
-  summarise(mean_value = mean(log2FC, na.rm = TRUE)) 
+  summarise(mean_value = mean(rpm_enrichment, na.rm = TRUE)) 
 
 # plot fold change across all samples
-alltarget_boxplot_exp1 <- ggplot(only_viral_targets_exp1, aes(x = name_group, y = log2FC)) +
+alltarget_boxplot_exp1 <- ggplot(only_viral_targets_exp1, aes(x = name_group, y = rpm_enrichment)) +
   geom_boxplot(width = 0.8, outlier.shape = 21, outlier.fill = "white", alpha = 0.6, width = 0.6, color = "black") +
-  geom_jitter(width = 0.1, alpha = 0.5, size = 1.5, aes(colour = log2FC)) +
-  scale_color_viridis(option = "magma", direction = -1) +
+  scale_y_log10() +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#E67E22") +  # Professional orange
   geom_hline(yintercept = 0, linetype = "dashed") +
   # dotted mean line
   geom_segment(
@@ -247,9 +266,9 @@ alltarget_boxplot_exp1 <- ggplot(only_viral_targets_exp1, aes(x = name_group, y 
   geom_text(data = mean_df_exp1, aes(x = name_group, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "grey40", size = 3.2, fontface = "italic") +
   scale_x_discrete() +  # adds space between boxes for labels
   labs(
-    title = "Viral Enrichment",
+    title = "Viral Enrichment (Experiment 1)",
     x = "",
-    y = expression(Log[2]*" fold-enrichment"),
+    y = "Fold enrichment",
   ) +
   theme_bw() +
   theme(
@@ -260,6 +279,42 @@ alltarget_boxplot_exp1 <- ggplot(only_viral_targets_exp1, aes(x = name_group, y 
 alltarget_boxplot_exp1
 ```
 
+Combined Enrichment Plot
+```{r}
+# Combine data from both experiments for unified visualization
+combined_targets <- bind_rows(
+  only_viral_targets %>% mutate(experiment_group = "Targeted Enrichment"),
+  only_viral_targets_exp1 %>% mutate(experiment_group = "Off-Target Enrichment")
+) %>% 
+  filter(!name_group == "HPV18")
+
+# Create combined boxplot with faceting
+combined_enrichment_plot <- ggplot(combined_targets, aes(x = name_group, y = rpm_enrichment, fill = experiment_group)) +
+  geom_boxplot(width = 0.7, outlier.shape = 21, outlier.fill = "white", alpha = 0.7, position = position_dodge(0.8)) +
+  scale_y_log10() +
+  geom_point(aes(color = experiment_group), 
+             position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+             alpha = 0.6, size = 1.5) +
+  scale_fill_manual(values = c("Targeted Enrichment" = "#3C8DBC", "Off-Target Enrichment" = "#E67E22")) +
+  scale_color_manual(values = c("Targeted Enrichment" = "#3C8DBC", "Off-Target Enrichment" = "#E67E22")) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Targeted vs Off Target Comparison",
+    x = "",
+    y = "Fold enrichment (log10)",
+    fill = "Dataset",
+    color = "Dataset"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+combined_enrichment_plot
+```
+
 Final rPM Enrichment Tables for Manuscript
 ```{r, results='asis'}
 cat("\\captionsetup{labelformat=empty}")
@@ -268,14 +323,15 @@ cat("\\captionsetup{labelformat=empty}")
 viral_target_enrichment_summary = only_viral_targets %>% 
   group_by(name_group) %>% 
   summarise(
-    mean_rpm_ngs = round(mean(NGS, na.rm = TRUE),2),
-    mean_rpm_msspe = round(mean(MSSPE, na.rm = TRUE),2),
-    median_enrichment = round(median(mean_rpm_enrichment, na.rm = TRUE),2),
+    rpm_ngs = round(sum(NGS, na.rm = TRUE),2),
+    rpm_msspe = round(sum(MSSPE, na.rm = TRUE),2),
+    median_enrichment = round(median(rpm_enrichment, na.rm = TRUE),2),
+    mean_enrichment = round(mean(rpm_enrichment, na.rm = TRUE),2),
     log_fold_enrichment = round(mean(log2FC, na.rm = TRUE),2),
     iqr = paste0(
-      round(quantile(mean_rpm_enrichment, 0.25, na.rm = TRUE), 1),
+      round(quantile(rpm_enrichment, 0.25, na.rm = TRUE), 1),
       "–",
-      round(quantile(mean_rpm_enrichment, 0.75, na.rm = TRUE), 1)
+      round(quantile(rpm_enrichment, 0.75, na.rm = TRUE), 1)
     ),
     n_pairs = n(),
     p_value = {
@@ -308,15 +364,15 @@ viral_target_enrichment_summary = only_viral_targets %>%
 viral_target_enrichment_summary %>%
   rename(
     "Virus" = name_group,
-    "rPM (NGS)" = mean_rpm_ngs,
-    "rPM (MSSPE)" = mean_rpm_msspe,
-    "Median Enrichment" = median_enrichment,
-    "Log Fold Change" = log_fold_enrichment,
+    "rPM (NGS)" = rpm_ngs,
+    "rPM (MSSPE)" = rpm_msspe,
+    "Median Fold Change" = median_enrichment,
+    "Mean Fold Change" = mean_enrichment,
     "IQR" = iqr,
     "p-value" = p_value,
     "effect size (r)" = effect_r
   ) %>% 
-  select(-n_pairs) %>% 
+  select(-n_pairs, -log_fold_enrichment) %>% 
   kable(
     format = "latex",  # or "latex" if using LaTeX
     caption = "Enrichment across all paired samples per viral target",
@@ -476,22 +532,25 @@ wilcox_summary %>%
 ```
 
 ```{r}
+# calculate mean so we can add to the boxplot
+mean_cov_df <- paired_tbl %>%
+  group_by(virus) %>%
+  summarise(mean_value = mean(enrichment_breadth, na.rm = TRUE)) 
+  
 # Create the boxplot for each targeted virus
 ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
   geom_boxplot(width = 0.6, outlier.shape = 21, outlier.fill = "white", color = "gray40") +
-  geom_jitter(width = 0.1, alpha = 0.5, size = 1.5, aes(colour = enrichment_breadth)) +
-  scale_color_viridis(option = "viridis", direction = -1) +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +  # Professional green
   geom_hline(yintercept = 0, linetype = "dashed") +
-  # Annotate median on each box
-  stat_summary(
-    fun = mean,
-    geom = "text",
-    aes(label = paste0("μ ", round(..y.., 1))),
-    vjust = -0.5,
-    size = 4,
-    color = "black",
-    fontface = "italic"
+  geom_segment(
+    data = mean_cov_df,
+    aes(x = as.numeric(virus) - 0.3,
+        xend = as.numeric(virus) + 0.3,
+        y = mean_value, yend = mean_value),
+    inherit.aes = FALSE,
+    linetype = "dashed", color = "#27AE60", linewidth = 0.6
   ) +
+  geom_text(data = mean_cov_df, aes(x = virus, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "black", size = 3.2, fontface = "italic") +
   labs(
     x = "",
     y = "Increase in genome coverage (%)",
@@ -511,24 +570,22 @@ ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
 # All viruses & enrichment 
 overall_tbl = all_viruses %>% 
   filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
-  filter(name_group != "PToV*") %>% # Remove torovirus
   group_by(name_group, library_prep) %>% 
-  summarize(rpm_mean = mean(nt_rpm, na.rm = TRUE), .groups = "drop")
+  summarize(rpm_mean = sum(nt_rpm, na.rm = TRUE), .groups = "drop")
 
 overall_tbl_summary = all_viruses %>% 
   filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
-  filter(name_group != "PToV*") %>% # Remove torovirus
   group_by(base_sample, name_group, library_prep) %>% 
-  summarize(rpm_mean = mean(nt_rpm, na.rm = TRUE), .groups = "drop") %>%
+  summarize(rpm_mean = sum(nt_rpm, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(
     names_from = library_prep,
     values_from = rpm_mean
   ) %>%
   mutate(
-    MSSPE = replace_na(MSSPE, 0), # Set NAs to 0 for non-detections
-    NGS   = replace_na(NGS, 0),   # Set NAs to 0 for non-detections
-    mean_rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
-    log2FC = log2(mean_rpm_enrichment),
+    MSSPE = replace_na(MSSPE, 0.1), # Set NAs to 0 for non-detections
+    NGS   = replace_na(NGS, 0.1),   # Set NAs to 0 for non-detections
+    rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
+    log2FC = log2(rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
   arrange(desc(log2FC))
@@ -539,9 +596,12 @@ round(quantile(overall_tbl_summary$log2FC, 0.25, na.rm = TRUE), 2)
 round(quantile(overall_tbl_summary$log2FC, 0.75, na.rm = TRUE), 2)
 
 # median enrichment overall
-median(overall_tbl_summary$mean_rpm_enrichment)
-round(quantile(overall_tbl_summary$mean_rpm_enrichment, 0.25, na.rm = TRUE), 2)
-round(quantile(overall_tbl_summary$mean_rpm_enrichment, 0.75, na.rm = TRUE), 2)
+median(overall_tbl_summary$rpm_enrichment)
+# mean
+mean(overall_tbl_summary$rpm_enrichment)
+# IQR
+round(quantile(overall_tbl_summary$rpm_enrichment, 0.25, na.rm = TRUE), 2)
+round(quantile(overall_tbl_summary$rpm_enrichment, 0.75, na.rm = TRUE), 2)
 
 # Paired Wilcoxon test across all samples
 wilcox_res <- wilcox.test(
@@ -553,17 +613,17 @@ wilcox_res <- wilcox.test(
 
 pval <- wilcox_res$p.value
 
-log2fc_plot = ggplot(overall_tbl_summary, aes(x = "", y = log2FC)) +
-  geom_boxplot(width = 0.4, fill = "gray90", color = "black") +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, aes(color = log2FC)) +
-  scale_color_viridis(option = "inferno", direction = -1) +
+log2fc_plot = ggplot(overall_tbl_summary, aes(x = "", y = rpm_enrichment)) +
+  geom_boxplot(width = 0.4, fill = "gray90", color = "black", outlier.shape = 21, outlier.fill = "white") +
+  scale_y_log10() +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#3C8DBC") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
-  annotate("text", x = 1, y = max(overall_tbl_summary$log2FC, na.rm = TRUE) * 1.1,
+  annotate("text", x = 1, y = max(overall_tbl_summary$rpm_enrichment, na.rm = TRUE) * 1.1,
            label = paste0("Wilcoxon p = ", signif(pval, 3)),
            fontface = "italic", size = 4) +
   labs(
     x = "",
-    y = expression(Log[2]*" fold-enrichment"),
+    y = "Fold enrichment (log10)",
     title = "a"
   ) +
   theme_minimal(base_size = 14) +
@@ -608,9 +668,9 @@ overall_cov_tbl_2 = cov_summary %>%
 
 # Boxplot of mean_nt_rpm by library_prep
 cov_plot = ggplot(paired_tbl, aes(x = "", y = enrichment_breadth)) +
-  geom_boxplot(width = 0.4, fill = "gray90", color = "black") +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, aes(color = enrichment_breadth)) +
-  scale_color_viridis(option = "viridis", direction = -1) +
+  geom_boxplot(width = 0.4, fill = "gray90", color = "black", outlier.shape = 21, outlier.fill = "white") +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +
+  #scale_color_viridis(option = "viridis", direction = -1) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
   annotate("text", x = 1, y = max(paired_tbl$enrichment_breadth, na.rm = TRUE) * 1.1,
            label = paste0("Wilcoxon p = ", signif(pval_cov, 3)),
@@ -646,8 +706,7 @@ library(purrr)
 
 # filter to targets
 filter2targets = all_viruses %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% 
-  filter(name_group != "PToV*")  # remove torovirus
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) 
 
 # get tables to create matrix
 all_targets = unique(filter2targets$name_group)

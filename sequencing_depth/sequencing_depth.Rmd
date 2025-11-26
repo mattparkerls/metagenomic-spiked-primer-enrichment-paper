@@ -39,40 +39,9 @@ all_data <- bind_rows(lapply(csv_files, process_csv_file))
 # separate slurry from pond samples
 pond_samples = c("s9","s10","s19","s20")
 
-# Create a metadata dataframe to merge with taxon data
-sample_metadata = seq_metrics %>% 
-  select(sample_name, water_control, infection_class) %>% 
-  mutate(
-  # Library prep: MSSPE if ends with "_M"
-  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
-
-  # Remove the _M suffix to get the core sample identifier
-  core = str_remove(sample_name, "_M$"),
-  # Detect experiment 3 first (Cxxx_LPx)
-  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
-
-  # Base: first sample ID (e.g. S10, PC1)
-  base = str_extract(core, "^[A-Za-z]+\\d+"),
-
-  # Append -2 or -3 only if not exp3
-  suffix = case_when(
-    !is_exp3 & str_detect(core, "_2$") ~ "-2",
-    !is_exp3 & str_detect(core, "_3$") ~ "-3",
-    TRUE ~ ""
-  ),
-
-  base_sample = tolower(paste0(base, suffix)),
-
-  # group slurry vs environmental samples
-  sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
-  
-  experiment = case_when(
-    is_exp3 ~ 3,
-    str_detect(core, "_3$") ~ 2,
-    TRUE ~ 1
-  )
-) %>%
-select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples) %>%
+  select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
@@ -94,15 +63,16 @@ species_data_filtered = all_data_species %>%
 
 ```{r}
 # specific names that should group together
-ent_v = "Enterovirus G"
-circo_v = "Circovirus"
-sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
-tes_v = "Teschovirus"
-aich_v = "Aichivirus"
-astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3"), collapse = "|")
-hpv18 = "Alphapapillomavirus"
-sapel_v = "Sapelovirus"
-boc_v = paste(c("Porcine bocavirus","Bocaparvovirus"), collapse = "|")
+  ent_v = "Enterovirus G"
+  circo_v = "Circovirus sp."
+  sapo_v = paste(c("Sapovirus","Sapporo"), collapse = "|")
+  tes_v = "Teschovirus"
+  aich_v = "Aichivirus"
+  astr_v = paste(c("Porcine astrovirus","Mamastrovirus 3","Mamastrovirus 22","Mamastrovirus pig","PoAstV","Pig astrovirus ahast-2","	
+Pig astrovirus CX1"), collapse = "|")
+  hpv18 = "Alphapapillomavirus"
+  sapel_v = paste(c("Sapelovirus sp.","Sapelovirus A"), collapse = "|")
+  boc_v = paste(c("Porcine bocavirus","Bocaparvovirus","Bocavirus pig"), collapse = "|")
 
 # Virus pattern definitions
 patterns <- c(
@@ -138,7 +108,7 @@ count_mat = all_data_species %>%
 # ---- USER PARAMETERS ----
 #depths <- c(5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 11e6)     # Target depths to simulate
 depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6)
-n_reps <- 10                        # Replicates per depth
+n_reps <- 1                        # Replicates per depth
 
 # Start the simulation!
 res <- simulate_downsampling(count_mat, depths, n_reps)
@@ -254,14 +224,17 @@ combined_curves = p1 / p2
 combined_curves
 
 ```
+
 TARGET-SPECIFIC SEQ DEPTH ANALYSIS
 ```{r}
 # Start the simulation!
-res_targets <- simulate_downsampling_targets(
-  count_mat,
-  depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6),
-  n_reps = 10,
-  patterns
+suppressWarnings(
+  res_targets <- simulate_downsampling_targets(
+    count_mat,
+    depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6),
+    n_reps = 10,
+    patterns
+  )
 )
 ```
 
@@ -313,7 +286,7 @@ summarize_detection <- function(res_targets, detection_threshold) {
 }
 
 # Summarized detection probabilities from simulation
-res_summary <- summarize_detection(res_targets, detection_threshold = 5)
+res_summary <- summarize_detection(res_targets, detection_threshold = 3)
 
 # Access outputs
 det_long <- res_summary$long                # replicate-level total reads + detected 0/1
@@ -351,6 +324,7 @@ exp(confint(model_seq_depth_div, parm="beta_", method="profile"))
 overdisp_fun(model_seq_depth_div)
 
 ```
+
 Microbial diversity sequencing depth tables
 ```{r, results='asis'}
 cat("\\captionsetup{labelformat=empty}")
@@ -431,6 +405,26 @@ exp(confint(model_seq_depth, parm="beta_", method="profile"))
 
 # standard error
 summary(model_seq_depth)$coefficients$cond
+
+# Extract coefficients
+coefs <- summary(model_seq_depth)$coefficients$cond
+
+# Compute OR, CI, p-value, and % change
+or_table <- data.frame(
+  term = rownames(coefs),
+  estimate = coefs[, "Estimate"],
+  std_error = coefs[, "Std. Error"],
+  z_value = coefs[, "z value"],
+  p_value = coefs[, "Pr(>|z|)"],
+  OR = exp(coefs[, "Estimate"]),
+  CI_low = exp(coefs[, "Estimate"] - 1.96 * coefs[, "Std. Error"]),
+  CI_high = exp(coefs[, "Estimate"] + 1.96 * coefs[, "Std. Error"])
+) |>
+  dplyr::mutate(
+    percent_change = (OR - 1) * 100   # negative = reduction, positive = increase
+  )
+
+or_table
 
 # check residuals
 r2_model <- r2_nakagawa(model_seq_depth)
@@ -591,15 +585,38 @@ det_summary_wide %>%
 ```
 
 ```{r}
-# Plot Target Curve
-#rare_targets_curve <- ggplot(det_summary, aes(x = depth/1e6, y = detect_prob, color = target)) +
-  #geom_line() + geom_point() +
-  #facet_wrap(~threshold, labeller = labeller(threshold = function(x) paste("≥", x, "reads"))) +
-  #labs(x = "Depth (million reads)", y = "Detection probability",
-       #title = "a") +
-  #theme(legend.position = "none")
+#Threshold 1
+res_summary <- summarize_detection(res_targets, detection_threshold = 1)
+det_long <- res_summary$long                # replicate-level total reads + detected 0/1
+det_summary <- res_summary$summary         # mean reads + detection prob per depth x target
+det_summary_libprep <- res_summary$summary_libprep  # mean reads + detection prob per depth x target x library_prep
 
-#rare_targets_curve
+det_summary_libprep_box_format <- det_summary_libprep %>%
+  group_by(depth, library_prep, target) %>%
+  summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
+            .groups = "drop")
+
+# Threshold 2
+res_summary_2 <- summarize_detection(res_targets, detection_threshold = 5)
+det_long_2 <- res_summary_2$long                # replicate-level total reads + detected 0/1
+det_summary_2 <- res_summary_2$summary         # mean reads + detection prob per depth x target
+det_summary_libprep_2 <- res_summary_2$summary_libprep  # mean reads + detection prob per depth x target x library_prep
+
+det_summary_libprep_box_format_2 <- det_summary_libprep_2 %>%
+  group_by(depth, library_prep, target) %>%
+  summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
+            .groups = "drop")
+
+#Threshold 3
+res_summary_3 <- summarize_detection(res_targets, detection_threshold = 10)
+det_long_3 <- res_summary_3$long                # replicate-level total reads + detected 0/1
+det_summary_3 <- res_summary_3$summary         # mean reads + detection prob per depth x target
+det_summary_libprep_3 <- res_summary_3$summary_libprep  # mean reads + detection prob per depth x target x library_prep
+
+det_summary_libprep_box_format_3 <- det_summary_libprep_3 %>%
+  group_by(depth, library_prep, target) %>%
+  summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
+            .groups = "drop")
 
 
 # Plot Library Prep Curve
@@ -608,13 +625,44 @@ rare_targets_curve_prep <- ggplot(det_summary_libprep_box_format, aes(x = depth/
   #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
   geom_point() +
   facet_wrap(~library_prep) +
-  labs(x = "Depth (million reads)", y = "Detection probability",
-       title = "b") +
-  theme_bw()
+  labs(x = "", y = "Detection probability",
+       title = "1 read") +
+  theme_bw() +
+  theme(
+        legend.position = "none",
+  )
 rare_targets_curve_prep
 
-#combined_target_curves = rare_targets_curve / rare_targets_curve_prep
-#combined_target_curves
+# Plot Library Prep Curve 2nd Depth
+rare_targets_curve_prep_2 <- ggplot(det_summary_libprep_box_format_2, aes(x = depth/1e6, y = mean_prob, color = target, linetype = library_prep)) +
+  geom_line() +   # small horizontal dodge to separate lines
+  #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
+  geom_point() +
+  facet_wrap(~library_prep) +
+  labs(x = "Depth (million reads)", y = "",
+       title = "5 reads") +
+  theme_bw() +
+  theme(
+        legend.position = "none",
+  )
+rare_targets_curve_prep_2
+
+# Plot Library Prep Curve 3nd Depth
+rare_targets_curve_prep_3 <- ggplot(det_summary_libprep_box_format_3, aes(x = depth/1e6, y = mean_prob, color = target, linetype = library_prep)) +
+  geom_line() +   # small horizontal dodge to separate lines
+  #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
+  geom_point() +
+  facet_wrap(~library_prep) +
+  labs(x = "", y = "",
+       title = "10 reads") +
+  theme_bw()
+rare_targets_curve_prep_3
+
+combined_target_curves = rare_targets_curve_prep | rare_targets_curve_prep_2 | rare_targets_curve_prep_3
+  plot_layout(ncol = 3, widths = c(1, 1, 1), guides = "collect") &
+  theme(plot.margin = unit(c(10.5, 10.5, 10.5, 10.5), "cm"))
+
+combined_target_curves
 ```
 
 

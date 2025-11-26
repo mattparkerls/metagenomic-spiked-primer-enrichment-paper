@@ -47,8 +47,11 @@ seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/da
 # Process all CSV files and combine them
 all_data <- bind_rows(lapply(csv_files, process_csv_file))
 
+# Pond sample names
+pond_samples = c("s9","s10","s19","s20")
+
 # Create sample metadata using helper function
-sample_metadata = create_sample_metadata(seq_metrics)
+sample_metadata = create_sample_metadata(seq_metrics, pond_sa)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
