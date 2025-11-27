@@ -1,14 +1,16 @@
 ---
 title: "R Notebook"
 output:
+  html_document:
+    df_print: paged
+  header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{DejaVu Sans}
+  - \captionsetup[table]{labelformat=empty}
   pdf_document:
     latex_engine: xelatex
     keep_tex: true
-    extra_dependencies: ["caption"]
-  header-includes:
-    - \usepackage{fontspec}
-    - \setmainfont{DejaVu Sans}
-    - \captionsetup[table]{labelformat=empty}
+    extra_dependencies: caption
 ---
 
 
@@ -232,7 +234,7 @@ suppressWarnings(
   res_targets <- simulate_downsampling_targets(
     count_mat,
     depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6),
-    n_reps = 10,
+    n_reps = 15,
     patterns
   )
 )
@@ -618,6 +620,17 @@ det_summary_libprep_box_format_3 <- det_summary_libprep_3 %>%
   summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
             .groups = "drop")
 
+#Threshold 4
+res_summary_4 <- summarize_detection(res_targets, detection_threshold = 15)
+det_long_4 <- res_summary_4$long                # replicate-level total reads + detected 0/1
+det_summary_4 <- res_summary_4$summary         # mean reads + detection prob per depth x target
+det_summary_libprep_4 <- res_summary_4$summary_libprep  # mean reads + detection prob per depth x target x library_prep
+
+det_summary_libprep_box_format_4 <- det_summary_libprep_4 %>%
+  group_by(depth, library_prep, target) %>%
+  summarise(mean_prob = mean(detect_prob, na.rm = TRUE),
+            .groups = "drop")
+
 
 # Plot Library Prep Curve
 rare_targets_curve_prep <- ggplot(det_summary_libprep_box_format, aes(x = depth/1e6, y = mean_prob, color = target, linetype = library_prep)) +
@@ -625,7 +638,7 @@ rare_targets_curve_prep <- ggplot(det_summary_libprep_box_format, aes(x = depth/
   #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
   geom_point() +
   facet_wrap(~library_prep) +
-  labs(x = "", y = "Detection probability",
+  labs(x = "", y = "",
        title = "1 read") +
   theme_bw() +
   theme(
@@ -639,7 +652,7 @@ rare_targets_curve_prep_2 <- ggplot(det_summary_libprep_box_format_2, aes(x = de
   #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
   geom_point() +
   facet_wrap(~library_prep) +
-  labs(x = "Depth (million reads)", y = "",
+  labs(x = "", y = "",
        title = "5 reads") +
   theme_bw() +
   theme(
@@ -653,13 +666,27 @@ rare_targets_curve_prep_3 <- ggplot(det_summary_libprep_box_format_3, aes(x = de
   #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
   geom_point() +
   facet_wrap(~library_prep) +
-  labs(x = "", y = "",
+  labs(x = "Depth (million reads)", y = "Detection probability",
        title = "10 reads") +
+  theme_bw() +
+  theme(
+        legend.position = "none",
+  )
+rare_targets_curve_prep_3
+
+# Plot Library Prep Curve 4th Depth
+rare_targets_curve_prep_4 <- ggplot(det_summary_libprep_box_format_4, aes(x = depth/1e6, y = mean_prob, color = target, linetype = library_prep)) +
+  geom_line() +   # small horizontal dodge to separate lines
+  #geom_point(position = position_jitter(width = 0.3, height = 0.0)) +  # jitter x slightly
+  geom_point() +
+  facet_wrap(~library_prep) +
+  labs(x = "", y = "",
+       title = "15 reads") +
   theme_bw()
 rare_targets_curve_prep_3
 
-combined_target_curves = rare_targets_curve_prep | rare_targets_curve_prep_2 | rare_targets_curve_prep_3
-  plot_layout(ncol = 3, widths = c(1, 1, 1), guides = "collect") &
+combined_target_curves = (rare_targets_curve_prep | rare_targets_curve_prep_2) / (rare_targets_curve_prep_3 | rare_targets_curve_prep_4)
+  plot_layout(ncol = 2, nrow = 2, widths = c(1, 1, 1, 1), guides = "collect") &
   theme(plot.margin = unit(c(10.5, 10.5, 10.5, 10.5), "cm"))
 
 combined_target_curves

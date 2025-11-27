@@ -323,8 +323,8 @@ cat("\\captionsetup{labelformat=empty}")
 viral_target_enrichment_summary = only_viral_targets %>% 
   group_by(name_group) %>% 
   summarise(
-    rpm_ngs = round(sum(NGS, na.rm = TRUE),2),
-    rpm_msspe = round(sum(MSSPE, na.rm = TRUE),2),
+    rpm_ngs = round(mean(NGS, na.rm = TRUE),2), # mean
+    rpm_msspe = round(mean(MSSPE, na.rm = TRUE),2), #mean
     median_enrichment = round(median(rpm_enrichment, na.rm = TRUE),2),
     mean_enrichment = round(mean(rpm_enrichment, na.rm = TRUE),2),
     log_fold_enrichment = round(mean(log2FC, na.rm = TRUE),2),
@@ -453,8 +453,10 @@ paired_tbl <- cov_summary %>%
       `sapel` = "PSapeV",
       `tev` = "PTeV",
       `pkv` = "PKV",
-    )
-  )
+    ),
+    virus = fct_reorder(virus, enrichment_breadth, .fun = mean, .desc = TRUE)
+  ) %>% 
+  arrange(desc(enrichment_breadth))
 
 # Summary table (1 row per metric)
 wilcox_summary = paired_tbl %>% 
@@ -539,7 +541,7 @@ mean_cov_df <- paired_tbl %>%
   
 # Create the boxplot for each targeted virus
 ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
-  geom_boxplot(width = 0.6, outlier.shape = 21, outlier.fill = "white", color = "gray40") +
+  geom_boxplot(width = 0.6, outlier.shape = 21, outlier.fill = "white", color = "black") +
   geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +  # Professional green
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_segment(
@@ -548,7 +550,7 @@ ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
         xend = as.numeric(virus) + 0.3,
         y = mean_value, yend = mean_value),
     inherit.aes = FALSE,
-    linetype = "dashed", color = "#27AE60", linewidth = 0.6
+    linetype = "dashed", color = "black", linewidth = 0.6
   ) +
   geom_text(data = mean_cov_df, aes(x = virus, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "black", size = 3.2, fontface = "italic") +
   labs(
@@ -792,6 +794,27 @@ overall_results
 ```
 Genus Odds Ratios
 ```{r}
+
+```
+
+Sanity checking raw rPM values for targeted viruses
+```{r}
+sanity_tbl = all_viruses %>% 
+  group_by(base_sample, library_prep, name_group, experiment) %>% 
+  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% 
+  summarize(rpm_sum = sum(nt_rpm, na.rm=TRUE), .groups="drop") %>% 
+  # Create column names combining experiment and library prep
+  mutate(exp_lib = paste0("exp", experiment, "_", tolower(library_prep))) %>%
+  # Group by name_group and pivot wider
+  group_by(name_group, exp_lib) %>%
+  summarize(nt_rpm = sum(rpm_sum, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(
+    names_from = exp_lib,
+    values_from = nt_rpm,
+    values_fill = 0  # Fill missing values with 0
+  ) %>%
+  # Reorder columns to have name_group first, then exp1_msspe, exp1_ngs, exp2_msspe, etc.
+  select(name_group, sort(tidyselect::peek_vars()[-1]))
 
 ```
 
