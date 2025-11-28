@@ -155,7 +155,7 @@ alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = rpm_enri
   theme_bw() +
   theme(
     legend.position = "none",
-    axis.text.x = element_text(angle = 45, hjust = 1),
+    #axis.text.x = element_text(angle = 45, hjust = 1),
   )
 
 alltarget_boxplot
@@ -473,7 +473,7 @@ wilcox_summary = paired_tbl %>%
 
 
 # Make table pretty
-wilcox_summary %>%
+wilcox_summary_kbl = wilcox_summary %>%
   mutate(
     virus = recode(virus,
       `astrov` = "PAstV",
@@ -815,9 +815,6 @@ ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
 if (exists("alltarget_boxplot")) {
   export_plot_png(alltarget_boxplot, fig_dir, "alltarget_boxplot.png", width = 9, height = 5)
 }
-if (exists("alltarget_boxplot_exp1")) {
-  export_plot_png(alltarget_boxplot_exp1, fig_dir, "alltarget_boxplot_experiment1.png", width = 9, height = 5)
-}
 if (exists("combined_enrichment_plot")) {
   export_plot_png(combined_enrichment_plot, fig_dir, "combined_enrichment_plot.png", width = 10, height = 5)
 }
@@ -851,12 +848,19 @@ if (exists("sanity_tbl")) {
   export_table_csv(sanity_tbl, table_dir, "target_virus_rpm_sanity_table.csv")
 }
 
-# Optional: export a LaTeX-styled table to PNG if available
+# Export a LaTeX-styled table to PNG 
 if (exists("viral_target_table")) {
   export_table_png(
     latex_table = viral_target_table,
     table_dir = table_dir,
     output_basename = "viral_target_enrichment_table"
+  )
+}
+if (exists("wilcox_summary_kbl")) {
+  export_table_png(
+    latex_table = wilcox_summary_kbl,
+    table_dir = table_dir,
+    output_basename = "wilcox_summary_kbl"
   )
 }
 ```
