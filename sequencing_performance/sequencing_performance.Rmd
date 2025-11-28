@@ -51,7 +51,7 @@ all_data <- bind_rows(lapply(csv_files, process_csv_file))
 pond_samples = c("s9","s10","s19","s20")
 
 # Create sample metadata using helper function
-sample_metadata = create_sample_metadata(seq_metrics, pond_sa)
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
@@ -60,15 +60,11 @@ merged_data <- all_data %>%
 # Filter to include only species level (tax_level == 1) to avoid duplication
 species_data <- merged_data %>%
   filter(tax_level == 1) %>% 
-  #filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
   filter(water_control == "No") %>%   # filter out Negative Controls
   filter(infection_class != "Definite") # filter out positive controls
 ```
 
 ```{r}
-# Filter to include only species level (tax_level == 1) to avoid duplication
-species_data <- merged_data %>%
-  filter(tax_level == 1)
 
 species_data_filtered = species_data %>% 
   filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
@@ -120,62 +116,77 @@ seq_metrics_summary_2 = seq_metrics_exp3 %>%
 
 ```
 
-
 ```{r, results='asis'}
 cat("\\captionsetup{labelformat=empty}")
-
-# Calculate total reads per sample for percentage calculations
+# -------------------------
+# Calculate viral percentages per sample
+# -------------------------
 sample_totals <- species_data %>%
-  group_by(sample_name, base_sample, library_prep) %>%
+  group_by(base_sample, library_prep) %>%
   summarise(
     total_nt_count = sum(nt_count, na.rm = TRUE),
     total_nr_count = sum(nr_count, na.rm = TRUE),
-    total_nt_rpm = sum(nt_rpm, na.rm = TRUE),
-    total_nr_rpm = sum(nr_rpm, na.rm = TRUE),
+    total_nt_rpm   = sum(nt_rpm, na.rm = TRUE),
+    total_nr_rpm   = sum(nr_rpm, na.rm = TRUE),
     .groups = "drop"
   )
 
-# Extract viral category data (excluding bacteriophages)
 virus_data <- species_data %>%
-  filter(category == "viruses") %>% 
-  filter(is_phage == "false") # Filter out phages
+  filter(category == "viruses", is_phage == "false") 
 
-# Calculate percentage of viral reads per sample
 viral_percentages <- virus_data %>%
-  drop_na(base_sample) %>% 
-  group_by(sample_name, base_sample, library_prep) %>%
+  drop_na(base_sample) %>%
+  group_by(base_sample, library_prep) %>%
   summarise(
     viral_nt_count = sum(nt_count, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  left_join(sample_totals, by = c("base_sample","library_prep")) %>%
+  left_join(sample_totals, by = c("base_sample", "library_prep")) %>%
   mutate(
     viral_nt_percent = (viral_nt_count / total_nt_count) * 100,
-    # Replace NaN and Inf with NA (handles division by zero)
-    viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent))
+    viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent)
+  )
 
-viral_summary = viral_percentages %>% 
-  select(base_sample, library_prep, viral_nt_count, viral_nt_percent) %>% 
+viral_summary <- viral_percentages %>%
+  select(base_sample, library_prep, viral_nt_count, viral_nt_percent) %>%
   pivot_wider(
     names_from = library_prep,
     values_from = c(viral_nt_count, viral_nt_percent),
     names_glue = "{.value}_{library_prep}"
   )
 
-# Join viral calculations to summary tables
-seq_metrics_summary_1 = seq_metrics_summary_1 %>% 
-  left_join(viral_summary, by = "base_sample","library_prep")
-seq_metrics_summary_1
-
-
-# Format Experiment 1 table for publication
-seq_metrics_summary_1 %>%
+# -------------------------
+# Create seq_metrics_summary_1
+# -------------------------
+seq_metrics_summary_1 <- seq_metrics_exp1 %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
+  group_by(base_sample, library_prep) %>%  # ensure single row per sample+prep
+  summarise(
+    total_reads = sum(total_reads),
+    passed_filters = sum(passed_filters),
+    compression_ratio = mean(compression_ratio, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters, compression_ratio),
+    names_glue = "{.value}_{library_prep}"
+  ) %>%
+  left_join(viral_summary, by = "base_sample") %>%
+  mutate(across(where(is.list), ~ as.numeric(unlist(.)))) %>%  # convert any list-columns to numeric
   mutate(
     passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
-    passed_filters_ngs = (passed_filters_NGS / total_reads_NGS) * 100
-  ) %>% 
-  select(base_sample, total_reads_NGS, total_reads_MSSPE, passed_filters_ngs, passed_filters_msspe, compression_ratio_NGS, compression_ratio_MSSPE, viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>% 
-  arrange(desc(viral_nt_percent_MSSPE)) %>% 
+    passed_filters_ngs   = (passed_filters_NGS / total_reads_NGS) * 100
+  ) %>%
+  select(base_sample, total_reads_NGS, total_reads_MSSPE,
+         passed_filters_ngs, passed_filters_msspe,
+         compression_ratio_NGS, compression_ratio_MSSPE,
+         viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>%
+  arrange(desc(viral_nt_percent_MSSPE))
+
+# Table 1: Experiment 1
+seq_metrics_summary_1_kbl <- seq_metrics_summary_1 %>%
   rename(
     "Sample" = base_sample,
     "Reads (MSSPE)" = total_reads_MSSPE,
@@ -186,31 +197,56 @@ seq_metrics_summary_1 %>%
     "DCR (MSSPE)" = compression_ratio_MSSPE,
     "Viral Reads % (MSSPE)" = viral_nt_percent_MSSPE,
     "Viral Reads % (NGS)" = viral_nt_percent_NGS
-  ) %>% 
+  ) %>%
   kable(
-    format = "latex", 
-    caption = "Experiment 1: Shallow Sequencing",
+    format = "latex",
+    booktabs = TRUE,
+    caption = "Experiment 1: Shallow-sequencing",
     digits = 2,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 
-# Join viral calculations to Experiment 3 summary table
-seq_metrics_summary_2 = seq_metrics_summary_2 %>% 
-  left_join(viral_summary, by = "base_sample","library_prep")
-
-
-# Format Experiment 3 table for publication
-seq_metrics_summary_2 %>%
+# -------------------------
+# Create seq_metrics_summary_2 (Experiment 3)
+# -------------------------
+seq_metrics_summary_2 <- seq_metrics_exp3 %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
+  group_by(base_sample, library_prep) %>%
+  summarise(
+    total_reads = sum(total_reads),
+    passed_filters = sum(passed_filters),
+    compression_ratio = mean(compression_ratio, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters, compression_ratio),
+    names_glue = "{.value}_{library_prep}"
+  ) %>%
+  left_join(viral_summary, by = "base_sample") %>%
+  mutate(across(where(is.list), ~ as.numeric(unlist(.)))) %>%
   mutate(
     passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
-    passed_filters_ngs = (passed_filters_NGS / total_reads_NGS) * 100
-  ) %>% 
-  select(base_sample, total_reads_NGS, total_reads_MSSPE, passed_filters_ngs, passed_filters_msspe, compression_ratio_NGS, compression_ratio_MSSPE, viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>% 
-  arrange(desc(viral_nt_percent_MSSPE)) %>% 
+    passed_filters_ngs   = (passed_filters_NGS / total_reads_NGS) * 100
+  ) %>%
+  select(base_sample, total_reads_NGS, total_reads_MSSPE,
+         passed_filters_ngs, passed_filters_msspe,
+         compression_ratio_NGS, compression_ratio_MSSPE,
+         viral_nt_percent_NGS, viral_nt_percent_MSSPE) %>%
+  arrange(desc(viral_nt_percent_MSSPE))
+
+# Table 2: Experiment 3
+seq_metrics_summary_2_kbl <- seq_metrics_summary_2 %>%
   rename(
     "Sample" = base_sample,
     "Reads (MSSPE)" = total_reads_MSSPE,
@@ -221,25 +257,25 @@ seq_metrics_summary_2 %>%
     "DCR (MSSPE)" = compression_ratio_MSSPE,
     "Viral Reads % (MSSPE)" = viral_nt_percent_MSSPE,
     "Viral Reads % (NGS)" = viral_nt_percent_NGS
-  ) %>% 
+  ) %>%
   kable(
-    format = "latex", 
-    caption = "Experiment 2: Deep Sequencing",
+    format = "latex",
+    booktabs = TRUE,
+    caption = "Experiment 2: Deep-sequencing",
     digits = 2,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
-
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 ```
 
-```{r}
-# Wilcoxon signed rank test to measure differences between library preps
-
-
-```
 
 
 ```{r}
@@ -341,21 +377,11 @@ library_prep_levels <- levels(factor(viral_percentages$library_prep))
 
 viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt_percent)) +
   geom_boxplot(outlier.fill = "white", outlier.alpha = 0.5) +
-  geom_jitter(
-    data = subset(viral_percentages, library_prep == "MSSPE"),
-    aes(color = viral_nt_percent),
-    width = 0.1, alpha = 0.7, size = 1.8
+  geom_jitter(aes(color = library_prep), width = 0.1, alpha = 0.7, size = 1.8) +
+  scale_color_manual(
+    values = c("MSSPE" = "#1f77b4",  # blue
+               "NGS"   = "#d62728")  # red
   ) +
-  scale_color_gradientn(colors = blues_palette) +
-  #scale_color_viridis(option = "plasma", direction = -1, limits = c(0, max(viral_percentages$viral_nt_percent))) +
-  new_scale_color() +
-  geom_jitter(
-    data = subset(viral_percentages, library_prep == "NGS"),
-    aes(color = viral_nt_percent),
-    width = 0.1, alpha = 0.7, size = 1.8
-  ) + 
-  scale_color_gradientn(colors = reds_palette) +
-  #scale_color_viridis(option = "D", direction = -1, limits = c(0, max(viral_percentages$viral_nt_percent))) +
   annotate("text", x = mean(1:length(library_prep_levels)), y = max(viral_percentages$viral_nt_percent, na.rm = TRUE) * 1.1,
            label = paste0("Wilcoxon p = ", signif(pval_viral_perc, 3)),
            fontface = "italic", size = 4) +
@@ -393,3 +419,35 @@ combined_boxplots = (overall_barplot | horizontal_space | viral_nt_boxplot) +
 combined_boxplots
 ```
 
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_performance/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_performance/tables"
+```
+
+```{r export_artifacts, include=FALSE}
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("combined_boxplots")) {
+  export_plot_png(combined_boxplots, fig_dir, "combined_boxplots.png", width = 9, height = 5)
+}
+
+# Export a LaTeX-styled table to PNG 
+if (exists("seq_metrics_summary_1_kbl")) {
+  export_table_png(
+    latex_table = seq_metrics_summary_1_kbl,
+    table_dir = table_dir,
+    output_basename = "seq_metrics_summary_1_kbl.png"
+  )
+}
+if (exists("seq_metrics_summary_2_kbl")) {
+  export_table_png(
+    latex_table = seq_metrics_summary_2_kbl,
+    table_dir = table_dir,
+    output_basename = "seq_metrics_summary_2_kbl.png"
+  )
+}
+
+```
