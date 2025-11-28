@@ -54,14 +54,21 @@ primer_tbl = primer_data %>%
     "Total Primers" = num_primers,
   ) %>% 
   kable(
-    format = "latex",  # or "latex" if using LaTeX
-    caption = "List of primers designed for MSSPE-based enrichment"
+    format = "latex",
+    booktabs = TRUE,
+    caption = "List of primers and targets designed for MSSPE-based enrichment",
+    digits = 3,
+    align = "lrrr",   # adjust as needed: text left, numbers right
+    format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-    #bootstrap_options = c("striped", "hover", "condensed", "responsive")
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 
 primer_tbl
 ```

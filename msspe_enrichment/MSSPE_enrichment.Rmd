@@ -54,6 +54,7 @@ merged_data <- all_data %>%
 hpv_data = merged_data %>% 
   filter(experiment == 1 | experiment == 2) %>% 
   filter(str_detect(name, regex("Alphapapillomavirus", ignore_case = TRUE)))
+
 pcv_data = merged_data %>%
   filter((experiment == 1 & library_prep == "MSSPE")) %>% 
   filter(str_detect(name, regex("Circovirus sp.", ignore_case = TRUE)))
@@ -62,11 +63,9 @@ pcv_data = merged_data %>%
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
   filter(nt_rpm >= 1) %>% # so zeros don't skew comparison
-  #filter((experiment == 1 & library_prep == "NGS") | (experiment == 2 | experiment == 3)) %>% # exp 1 NGS libraries, and all exp 2 & 3
   filter(water_control == "No") %>%   # filter out Negative Controls
   filter(infection_class != "Definite") %>%   # filter out positive control samples
-  add_row(hpv_data)# %>%   # but keep hpv data 
-  #add_row(pcv_data) # and pcv msspe data from exp 1
+  add_row(hpv_data) # but keep hpv data 
 
 ```
 
@@ -206,9 +205,8 @@ all_data_species_exp1 <- merged_data_exp1 %>%
   filter(tax_level == 1) %>% 
   filter(experiment == 1) %>%  # Only experiment 1
   filter(water_control == "No") %>%   # Exclude negative controls
-  filter(!base_sample %in% c("pc1","pc3")) %>%  # Exclude zymo fecal controls
-  filter(infection_class != "Definite")   # Exclude positive controls
-  #filter(nt_rpm >= 1) # rpm at least 1
+  filter(infection_class != "Definite") %>%    # Exclude positive controls
+  filter(nt_rpm >= 1) # rpm at least 1
 
 # Filter to viral category and exclude phages
 all_viruses_exp1 <- all_data_species_exp1 %>%
@@ -216,7 +214,8 @@ all_viruses_exp1 <- all_data_species_exp1 %>%
   filter(is_phage == "false")
 
 # Add standardized name groups using helper function
-all_viruses_exp1 = add_viral_name_groups(all_viruses_exp1)
+all_viruses_exp1 = add_viral_name_groups(all_viruses_exp1) %>% 
+  filter(!name_group %in% c("HPV18","PCV"))
 
 # Filter to only the target viral species or genus
 only_viral_targets_exp1 = all_viruses_exp1 %>% 
@@ -286,7 +285,7 @@ combined_targets <- bind_rows(
   only_viral_targets %>% mutate(experiment_group = "Targeted Enrichment"),
   only_viral_targets_exp1 %>% mutate(experiment_group = "Off-Target Enrichment")
 ) %>% 
-  filter(!name_group == "HPV18")
+  filter(!name_group %in% c("HPV18","PCV"))
 
 # Create combined boxplot with faceting
 combined_enrichment_plot <- ggplot(combined_targets, aes(x = name_group, y = rpm_enrichment, fill = experiment_group)) +
