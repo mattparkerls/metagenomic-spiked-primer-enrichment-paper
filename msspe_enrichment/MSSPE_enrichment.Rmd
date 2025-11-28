@@ -4,15 +4,16 @@ output:
   pdf_document:
     latex_engine: xelatex
     keep_tex: true
-    extra_dependencies: ["caption"]
+    extra_dependencies: caption
   header-includes:
-    - \usepackage{fontspec}
-    - \setmainfont{DejaVu Sans}
-    - \captionsetup[table]{labelformat=empty}
-
+  - \usepackage{fontspec}
+  - \setmainfont{DejaVu Sans}
+  - \captionsetup[table]{labelformat=empty}
+  html_document:
+    df_print: paged
 ---
 
-```{r}
+```{r include=FALSE}
 library(dplyr)
 library(tidyr)
 library(stringr)
@@ -30,6 +31,7 @@ source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 knitr::opts_chunk$set(dev = "cairo_pdf")
 
 ```
+
 
 ```{r}
 # List all CSV files in the directory
@@ -146,7 +148,7 @@ alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = rpm_enri
   geom_text(data = mean_df, aes(x = name_group, y = mean_value, label = paste0("μ ", round(mean_value, 1))), vjust = -1, color = "black", size = 3.2, fontface = "italic") +
   scale_x_discrete() +  # adds space between boxes for labels
   labs(
-    title = "Viral Enrichment - All Experiments",
+    title = "",
     x = "",
     y = "Fold enrichment (log10)",
   ) +
@@ -157,40 +159,6 @@ alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = rpm_enri
   )
 
 alltarget_boxplot
-```
-
-```{r}
-# Do calculations for reads/nt_count instead of rpm
-reads_summary = all_viruses %>% 
-  group_by(base_sample, library_prep, name_group) %>% 
-  filter(str_detect(name_group, regex(paste0("\\b(", paste(name_targets, collapse="|"), ")\\b"), ignore_case = TRUE))) %>% # Filter to targeted viruses
-  summarize(reads_sum = sum(nt_count, na.rm=TRUE), .groups="drop") %>% # sum rPM for each target
-  pivot_wider(
-    names_from = library_prep,
-    values_from = reads_sum
-  ) %>%
-  mutate(
-    MSSPE = replace_na(MSSPE, 1), # Set NAs to 0 for non-detections
-    NGS   = replace_na(NGS, 1),   # Set NAs to 0 for non-detections
-    reads_enrichment = (`MSSPE` + 1)/(`NGS` + 1),
-    log2FC = log2(reads_enrichment),
-    name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
-  ) %>% 
-  arrange(desc(log2FC))
-reads_summary
-
-overall_reads_enrichment = reads_summary %>%
-  group_by(name_group) %>%
-  summarize(
-    median_FC = median(reads_enrichment),
-    mean_FC   = mean(reads_enrichment),
-    median_log2FC = median(log2FC),
-    n_pairs = n(),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(median_log2FC))
-overall_reads_enrichment
-
 ```
 
 
@@ -298,7 +266,7 @@ combined_enrichment_plot <- ggplot(combined_targets, aes(x = name_group, y = rpm
   scale_color_manual(values = c("Targeted Enrichment" = "#3C8DBC", "Off-Target Enrichment" = "#E67E22")) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
   labs(
-    title = "Targeted vs Off Target Comparison",
+    title = "",
     x = "",
     y = "Fold enrichment (log10)",
     fill = "Dataset",
@@ -306,7 +274,7 @@ combined_enrichment_plot <- ggplot(combined_targets, aes(x = name_group, y = rpm
   ) +
   theme_bw() +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
+    #axis.text.x = element_text(angle = 45, hjust = 1),
     legend.position = "top",
     legend.title = element_blank()
   )
@@ -360,7 +328,7 @@ viral_target_enrichment_summary = only_viral_targets %>%
 
 
 # Make table pretty
-viral_target_enrichment_summary %>%
+viral_target_table <- viral_target_enrichment_summary %>%
   rename(
     "Virus" = name_group,
     "rPM (NGS)" = rpm_ngs,
@@ -373,15 +341,23 @@ viral_target_enrichment_summary %>%
   ) %>% 
   select(-n_pairs, -log_fold_enrichment) %>% 
   kable(
-    format = "latex",  # or "latex" if using LaTeX
+    format = "latex",
+    booktabs = TRUE,
     caption = "Enrichment across all paired samples per viral target",
     digits = 3,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
+
+viral_target_table
 ```
 
 Proportion of samples with viral targets
@@ -522,14 +498,20 @@ wilcox_summary %>%
   select(-n_pairs) %>% 
   kable(
     format = "latex",  # or "latex" if using LaTeX
-    caption = "Genome coverage enrichment across all paired samples per viral target",
+    booktabs = TRUE,
+    caption = "Genome coverage increase across all paired samples per viral target",
     digits = 3,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 ```
 
 ```{r}
@@ -539,7 +521,7 @@ mean_cov_df <- paired_tbl %>%
   summarise(mean_value = mean(enrichment_breadth, na.rm = TRUE)) 
   
 # Create the boxplot for each targeted virus
-ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
+all_target_cov_plot = ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
   geom_boxplot(width = 0.6, outlier.shape = 21, outlier.fill = "white", color = "black") +
   geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +  # Professional green
   geom_hline(yintercept = 0, linetype = "dashed") +
@@ -563,6 +545,8 @@ ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
     panel.grid.major.x = element_blank(),
     panel.grid.minor = element_blank()
   )
+
+all_target_cov_plot
 ```
 
 ```{r}
@@ -815,5 +799,65 @@ sanity_tbl = all_viruses %>%
   # Reorder columns to have name_group first, then exp1_msspe, exp1_ngs, exp2_msspe, etc.
   select(name_group, sort(tidyselect::peek_vars()[-1]))
 
+```
+
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/msspe_enrichment/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/msspe_enrichment/tables"
+```
+
+```{r export_artifacts, include=FALSE}
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("alltarget_boxplot")) {
+  export_plot_png(alltarget_boxplot, fig_dir, "alltarget_boxplot.png", width = 9, height = 5)
+}
+if (exists("alltarget_boxplot_exp1")) {
+  export_plot_png(alltarget_boxplot_exp1, fig_dir, "alltarget_boxplot_experiment1.png", width = 9, height = 5)
+}
+if (exists("combined_enrichment_plot")) {
+  export_plot_png(combined_enrichment_plot, fig_dir, "combined_enrichment_plot.png", width = 10, height = 5)
+}
+if (exists("coverage_enrichment_plot")) {
+  export_plot_png(coverage_enrichment_plot, fig_dir, "coverage_enrichment_by_virus.png", width = 9, height = 5)
+}
+if (exists("log2fc_plot")) {
+  export_plot_png(log2fc_plot, fig_dir, "overall_enrichment_boxplot.png", width = 5, height = 5)
+}
+if (exists("cov_plot")) {
+  export_plot_png(cov_plot, fig_dir, "overall_coverage_boxplot.png", width = 5, height = 5)
+}
+if (exists("combined_boxplots")) {
+  export_plot_png(combined_boxplots, fig_dir, "combined_boxplots.png", width = 12, height = 5)
+}
+
+# Tables (CSV)
+if (exists("viral_target_enrichment_summary")) {
+  export_table_csv(viral_target_enrichment_summary, table_dir, "viral_target_enrichment_summary.csv")
+}
+if (exists("wilcox_summary")) {
+  export_table_csv(wilcox_summary, table_dir, "genome_coverage_enrichment_summary.csv")
+}
+if (exists("results_libprep")) {
+  export_table_csv(results_libprep, table_dir, "detection_odds_results_by_target.csv")
+}
+if (exists("overall_results")) {
+  export_table_csv(overall_results, table_dir, "overall_detection_odds_results.csv")
+}
+if (exists("sanity_tbl")) {
+  export_table_csv(sanity_tbl, table_dir, "target_virus_rpm_sanity_table.csv")
+}
+
+# Optional: export a LaTeX-styled table to PNG if available
+if (exists("viral_target_table")) {
+  export_table_png(
+    latex_table = viral_target_table,
+    table_dir = table_dir,
+    output_basename = "viral_target_enrichment_table"
+  )
+}
 ```
 

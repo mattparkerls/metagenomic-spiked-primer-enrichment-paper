@@ -299,4 +299,129 @@ Pig astrovirus CX1"), collapse = "|")
     ))
 }
 
+
+# ---- EXPORT HELPERS ----
+# Ensure export directories exist and return their paths
+ensure_export_dirs <- function(fig_dir = NULL, table_dir = NULL) {
+  if (!is.null(fig_dir) && !dir.exists(fig_dir)) {
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!is.null(table_dir) && !dir.exists(table_dir)) {
+    dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  invisible(list(fig_dir = fig_dir, table_dir = table_dir))
+}
+
+# Save a ggplot object to a high-resolution PNG
+export_plot_png <- function(plot_obj,
+                            fig_dir,
+                            filename,
+                            width = 8,
+                            height = 5,
+                            dpi = 600,
+                            ...) {
+  if (missing(fig_dir) || missing(filename)) {
+    stop("'fig_dir' and 'filename' must be provided for export_plot_png().")
+  }
+  ensure_export_dirs(fig_dir = fig_dir)
+  if (is.null(plot_obj)) {
+    warning("Plot object is NULL; skipping export.")
+    return(invisible(FALSE))
+  }
+  if (!inherits(plot_obj, "ggplot")) {
+    warning("Object passed to export_plot_png() is not a ggplot; skipping.")
+    return(invisible(FALSE))
+  }
+  ggsave(
+    filename = file.path(fig_dir, filename),
+    plot = plot_obj,
+    width = width,
+    height = height,
+    dpi = dpi,
+    limitsize = FALSE,
+    ...
+  )
+  invisible(TRUE)
+}
+
+# Write a data frame to CSV within the tables directory
+export_table_csv <- function(table_df, table_dir, filename, ...) {
+  if (missing(table_dir) || missing(filename)) {
+    stop("'table_dir' and 'filename' must be provided for export_table_csv().")
+  }
+  if (!requireNamespace("readr", quietly = TRUE)) {
+    stop("Package 'readr' is required for export_table_csv().")
+  }
+  if (is.null(table_df)) {
+    warning("Table data is NULL; skipping CSV export.")
+    return(invisible(FALSE))
+  }
+  ensure_export_dirs(table_dir = table_dir)
+  readr::write_csv(table_df, file.path(table_dir, filename), ...)
+  invisible(TRUE)
+}
+
+# Convert a LaTeX table string into a high-resolution PNG via tinytex + magick
+export_table_png <- function(latex_table,
+                             table_dir,
+                             output_basename,
+                             paper_size = c(width = "8in", height = "6in"),
+                             density = 600,
+                             extra_latex = character()) {
+  if (missing(table_dir) || missing(output_basename)) {
+    stop("'table_dir' and 'output_basename' must be provided for export_table_png().")
+  }
+  if (is.null(latex_table)) {
+    warning("LaTeX table is NULL; skipping PNG export.")
+    return(invisible(FALSE))
+  }
+  if (inherits(latex_table, "knitr_kable")) {
+    latex_table <- as.character(latex_table)
+  }
+  latex_table <- paste(latex_table, collapse = "\n")
+  deps <- c("tinytex", "magick", "pdftools")
+  missing_pkgs <- deps[!sapply(deps, requireNamespace, quietly = TRUE)]
+  if (length(missing_pkgs) > 0) {
+    warning(
+      sprintf(
+        "Missing packages (%s); skipping table PNG export.",
+        paste(missing_pkgs, collapse = ", ")
+      )
+    )
+    return(invisible(FALSE))
+  }
+  ensure_export_dirs(table_dir = table_dir)
+  tex_lines <- c(
+    "\\documentclass[preview]{standalone}",
+    "\\usepackage{graphicx}",
+    "\\usepackage{booktabs}",
+    "\\usepackage{tabu}",
+    "\\usepackage[table]{xcolor}",
+    "\\usepackage{geometry}",
+    sprintf("\\geometry{paperwidth=%s, paperheight=%s}", paper_size["width"], paper_size["height"]),
+    extra_latex,
+    "\\begin{document}",
+    latex_table,
+    "\\end{document}"
+  )
+  tex_path <- file.path(table_dir, paste0(output_basename, ".tex"))
+  writeLines(tex_lines, tex_path)
+  original_wd <- getwd()
+  on.exit(setwd(original_wd), add = TRUE)
+  setwd(table_dir)
+  tinytex::latexmk(paste0(output_basename, ".tex"))
+  pdf_path <- file.path(table_dir, paste0(output_basename, ".pdf"))
+  if (!file.exists(pdf_path)) {
+    warning(sprintf("PDF %s was not created; skipping PNG export.", basename(pdf_path)))
+    return(invisible(FALSE))
+  }
+  img <- magick::image_read_pdf(pdf_path, density = density)
+  magick::image_write(
+    img[1],
+    path = file.path(table_dir, paste0(output_basename, ".png")),
+    format = "png"
+  )
+  invisible(TRUE)
+}
+
   
