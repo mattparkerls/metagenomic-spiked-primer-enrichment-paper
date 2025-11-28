@@ -1,16 +1,16 @@
 ---
 title: "R Notebook"
 output:
-  html_document:
-    df_print: paged
-  header-includes:
-  - \usepackage{fontspec}
-  - \setmainfont{DejaVu Sans}
-  - \captionsetup[table]{labelformat=empty}
   pdf_document:
     latex_engine: xelatex
     keep_tex: true
     extra_dependencies: caption
+  header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{DejaVu Sans}
+  - \captionsetup[table]{labelformat=empty}
+  html_document:
+    df_print: paged
 ---
 
 
@@ -110,7 +110,7 @@ count_mat = all_data_species %>%
 # ---- USER PARAMETERS ----
 #depths <- c(5e5, 1e6, 2e6, 3e6, 4e6, 5e6, 7e6, 9e6, 11e6)     # Target depths to simulate
 depths = c(1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6)
-n_reps <- 1                        # Replicates per depth
+n_reps <- 10                        # Replicates per depth
 
 # Start the simulation!
 res <- simulate_downsampling(count_mat, depths, n_reps)
@@ -339,13 +339,14 @@ fixed_tbl_div <- summary(model_seq_depth_div)$coefficients$cond %>%
 
 # Add odds ratio and 95% CI
 fixed_tbl_div <- fixed_tbl_div %>%
+  # remove intercept row prior to recode
+  filter(Effect != "(Intercept)") %>%
   mutate(
     OR = exp(Estimate),
     CI_lower = exp(Estimate - 1.96*SE),
     CI_upper = exp(Estimate + 1.96*SE),
     Percent_change = (OR - 1) * 100,                 
     Effect = recode(Effect,
-                    `(Intercept)` = "intercept",
                     `library_prepMSSPE` = "Library prep",
                     `depth_scaled` = "Sequencing depth",
                     `sample_typeslurry` = "Sample type",
@@ -374,7 +375,7 @@ random_tbl_div <- data.frame(
 # Combine in a nice list for reporting
 list(Fixed_Effects = fixed_tbl_div, Random_Effects = random_tbl_div) 
 # Optional: use kable() to print nicely in RMarkdown
-kable(fixed_tbl_div, digits = 3, caption = "Fixed effects from GLMM (negative binomial)")
+fixed_tbl_div_kbl = kable(fixed_tbl_div, digits = 3, caption = "The fixed effects of sequencing depth on microbial diversity")
 kable(random_tbl_div, digits = 3, caption = "Random effects (variance components) from GLMM")
 
 ```
@@ -474,12 +475,13 @@ fixed_tbl <- summary(model_seq_depth)$coefficients$cond %>%
 
 # Add odds ratio and 95% CI
 fixed_tbl <- fixed_tbl %>%
+  # remove intercept row prior to recode
+  filter(Effect != "(Intercept)") %>%
   mutate(
     OR = exp(Estimate),
     CI_lower = exp(Estimate - 1.96*SE),
     CI_upper = exp(Estimate + 1.96*SE),
     Effect = recode(Effect,
-                    `(Intercept)` = "intercept",
                     `library_prepMSSPE` = "Library prep",
                     `depth_scaled` = "Sequencing depth",
                     `library_prepMSSPE:depth_scaled` = "Library prep * Sequencing depth"
@@ -503,7 +505,7 @@ random_tbl <- data.frame(
 # Combine in a nice list for reporting
 list(Fixed_Effects = fixed_tbl, Random_Effects = random_tbl) 
 # Optional: use kable() to print nicely in RMarkdown
-kable(fixed_tbl, digits = 3, caption = "Fixed effects from GLMM (binomial)")
+fixed_tbl_kbl = kable(fixed_tbl, digits = 3, caption = "The fixed effects of sequencing depth on detecting targeted viruses")
 kable(random_tbl, digits = 3, caption = "Random effects (variance components) from GLMM")
 
 ```
@@ -691,5 +693,40 @@ combined_target_curves = (rare_targets_curve_prep | rare_targets_curve_prep_2) /
 
 combined_target_curves
 ```
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_depth/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_depth/tables"
+```
 
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("combined_curves")) {
+  export_plot_png(combined_curves, fig_dir, "combined_curves.png", width = 9, height = 5)
+}
+if (exists("combined_target_curves")) {
+  export_plot_png(combined_target_curves, fig_dir, "combined_target_curves.png", width = 9, height = 5)
+}
+
+# Export a LaTeX-styled table to PNG 
+if (exists("fixed_tbl_kbl")) {
+  export_table_png(
+    latex_table = fixed_tbl_kbl,
+    table_dir = table_dir,
+    output_basename = "fixed_tbl_kbl.png"
+  )
+}
+if (exists("fixed_tbl_div_kbl")) {
+  export_table_png(
+    latex_table = fixed_tbl_div_kbl,
+    table_dir = table_dir,
+    output_basename = "fixed_tbl_div_kbl.png"
+  )
+}
+
+```
 
