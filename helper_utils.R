@@ -379,6 +379,14 @@ export_table_png <- function(latex_table,
     latex_table <- as.character(latex_table)
   }
   latex_table <- paste(latex_table, collapse = "\n")
+
+  # Sanitize captions to avoid auto-numbering and 'Table 1' prefix in PNG output.
+  # Convert \caption{...} to \caption*{...} (starred form: no number, no 'Table').
+  # Similarly handle \captionof{table}{...} to \captionof*{table}{...}.
+  # Also remove optional short captions like \caption[Short]{Long}.
+  latex_table <- gsub("\\\\caption\\s*\\[.*?\\]\\s*\\{(.*?)\\}", "\\\\caption*{\\1}", latex_table, perl = TRUE)
+  latex_table <- gsub("\\\\caption\\s*\\{(.*?)\\}", "\\\\caption*{\\1}", latex_table, perl = TRUE)
+  latex_table <- gsub("\\\\captionof\\s*\\{table\\}\\s*\\{(.*?)\\}", "\\\\captionof*{table}{\\1}", latex_table, perl = TRUE)
   deps <- c("tinytex", "magick", "pdftools")
   missing_pkgs <- deps[!sapply(deps, requireNamespace, quietly = TRUE)]
   if (length(missing_pkgs) > 0) {
@@ -397,6 +405,8 @@ export_table_png <- function(latex_table,
     "\\usepackage{booktabs}",
     "\\usepackage{tabu}",
     "\\usepackage[table]{xcolor}",
+    "\\usepackage{caption}",
+    "\\captionsetup[table]{labelformat=empty,labelsep=none}",
     "\\usepackage{geometry}",
     sprintf("\\geometry{paperwidth=%s, paperheight=%s}", paper_size["width"], paper_size["height"]),
     extra_latex,

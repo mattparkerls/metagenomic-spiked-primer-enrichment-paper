@@ -425,7 +425,8 @@ fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_per
 table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_performance/tables"
 ```
 
-```{r export_artifacts, include=FALSE}
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
 # Use shared helpers from helper_utils.R to export plots and tables
 ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
 
