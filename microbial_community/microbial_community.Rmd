@@ -14,9 +14,7 @@ output:
 ```{r}
 library(tidyverse)  # For data manipulation and visualization
 library(vegan)      # For diversity analyses
-library(phyloseq)   # For microbiome data analysis
 library(ggplot2)    # For enhanced visualizations
-library(microbiome)
 library(dplyr)
 library(tidyr)
 library(patchwork)
@@ -38,51 +36,57 @@ all_data <- bind_rows(lapply(csv_files, process_csv_file))
 # separate slurry from pond samples
 pond_samples = c("s9","s10","s19","s20")
 
-# Create a metadata dataframe to merge with taxon data
-sample_metadata = seq_metrics %>% 
-  select(sample_name, water_control, infection_class) %>% 
-  mutate(
-  # Library prep: MSSPE if ends with "_M"
-  library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
-
-  # Remove the _M suffix to get the core sample identifier
-  core = str_remove(sample_name, "_M$"),
-  # Detect experiment 3 first (Cxxx_LPx)
-  is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
-
-  # Base: first sample ID (e.g. S10, PC1)
-  base = str_extract(core, "^[A-Za-z]+\\d+"),
-
-  # Append -2 or -3 only if not exp3
-  suffix = case_when(
-    !is_exp3 & str_detect(core, "_2$") ~ "-2",
-    !is_exp3 & str_detect(core, "_3$") ~ "-3",
-    TRUE ~ ""
-  ),
-
-  base_sample = tolower(paste0(base, suffix)),
-
-  # group slurry vs environmental samples
-  sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
-  
-  experiment = case_when(
-    is_exp3 ~ 3,
-    str_detect(core, "_3$") ~ 2,
-    TRUE ~ 1
-  )
-) %>%
-select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples) %>%
+  select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
 
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
 
+# # Create a metadata dataframe to merge with taxon data
+# sample_metadata = seq_metrics %>% 
+#   select(sample_name, water_control, infection_class) %>% 
+#   mutate(
+#   # Library prep: MSSPE if ends with "_M"
+#   library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
+# 
+#   # Remove the _M suffix to get the core sample identifier
+#   core = str_remove(sample_name, "_M$"),
+#   # Detect experiment 3 first (Cxxx_LPx)
+#   is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
+# 
+#   # Base: first sample ID (e.g. S10, PC1)
+#   base = str_extract(core, "^[A-Za-z]+\\d+"),
+# 
+#   # Append -2 or -3 only if not exp3
+#   suffix = case_when(
+#     !is_exp3 & str_detect(core, "_2$") ~ "-2",
+#     !is_exp3 & str_detect(core, "_3$") ~ "-3",
+#     TRUE ~ ""
+#   ),
+# 
+#   base_sample = tolower(paste0(base, suffix)),
+# 
+#   # group slurry vs environmental samples
+#   sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
+#   
+#   experiment = case_when(
+#     is_exp3 ~ 3,
+#     str_detect(core, "_3$") ~ 2,
+#     TRUE ~ 1
+#   )
+# ) %>%
+# select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+# 
+# # Merge the taxonomy data with metadata
+# merged_data <- all_data %>%
+#   left_join(sample_metadata, by = "sample_name")
+
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
-  #filter(experiment == 2 | experiment == 3) %>%  # filter in specific experiments
-  filter(water_control == "No") %>%   # filter out Negative Controls
-  filter(!base_sample %in% c("pc1","pc3")) %>%  # filter out zymo fecal controls
+  filter(water_control == "No") %>% 
   filter(infection_class != "Definite") # filter out positive controls
 ```
 
@@ -180,22 +184,31 @@ compute_diversity_results <- function(df) {
                 select(sample_name, library_prep, base_sample, sample_type) %>% 
                 distinct(),
               by = "sample_name")
-
-  diversity_paired <- diversity_tbl %>%
+  
+  diversity_tbl <- diversity_tbl %>%
+  group_by(base_sample, library_prep) %>%
+  summarise(
+    Shannon = mean(Shannon),
+    Simpson = mean(Simpson),
+    Richness = mean(Richness),
+    .groups = "drop"
+  )
+  
+  diversity_paired = diversity_tbl %>%
     pivot_wider(
       id_cols = base_sample,
       names_from = library_prep,
       values_from = c(Shannon, Simpson, Richness)
     )
 
-  metrics <- c("Shannon", "Simpson", "Richness")
-  
+    metrics <- c("Shannon", "Simpson", "Richness")
+         
   results <- lapply(metrics, function(metric) {
     ngs <- diversity_paired[[paste0(metric, "_NGS")]]
     msspe <- diversity_paired[[paste0(metric, "_MSSPE")]]
-    
+
     test <- wilcox.test(ngs, msspe, paired = TRUE)
-    
+
     data.frame(
       metric = metric,
       NGS = mean(ngs, na.rm = TRUE),
@@ -203,7 +216,7 @@ compute_diversity_results <- function(df) {
       `p-value` = test$p.value
     )
   })
-  
+
   bind_rows(results)
 }
 
@@ -221,16 +234,23 @@ results_all <- bind_rows(tbl_slurry, tbl_env, tbl_overall) %>%
   rename("Diversity Measure" = metric)
 
 # ---- Final kable ----
-results_all %>%
+results_all_kbl = results_all %>%
   kable(
     format = "latex",
+    booktabs = TRUE,
     caption = "Comparison of diversity metrics between library preparation methods by sample type",
-    digits = 3,
-    booktabs = TRUE
+    digits = 2,
+    align = "lrrr",   # adjust as needed: text left, numbers right
+    format.args = list(big.mark = ",")
   ) %>%
-  kable_styling(full_width = TRUE, position = "center") %>%
-  collapse_rows(columns = 1, valign = "top")
-
+  kable_styling(
+    latex_options = c("striped", "hold_position"), # polished journal look
+    position = "center",
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 ```
 
 ```{r}
@@ -384,7 +404,7 @@ top_genus_summary = top_genus_summary %>%
   left_join(genus_composition, by = "genus_name") %>% 
   arrange(desc(perc_of_samples))
 
-top_genus_summary %>%
+top_genus_summary_kbl = top_genus_summary %>%
   rename(
     "Genus" = genus_name,
     "rPM" = mean_rpm,
@@ -394,15 +414,21 @@ top_genus_summary %>%
   ) %>% 
   select(-total_abundance) %>% 
   kable(
-    format = "latex",  # or "latex" if using LaTeX
+    format = "latex",
+    booktabs = TRUE,
     caption = "Most abundant genera across all samples",
     digits = 2,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
 
 top_genus_summary
 ```
@@ -537,5 +563,57 @@ tax_comp_plot_all_samples = ggplot(phylum_composition_samples, aes(x = base_samp
        fill = "Phylum") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 tax_comp_plot_all_samples
+
+```
+
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/tables"
+```
+
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("combined_tax_plots")) {
+  export_plot_png(combined_tax_plots, fig_dir, "combined_tax_plots.png", width = 9, height = 5)
+}
+if (exists("tax_comp_plot_all_samples")) {
+  export_plot_png(tax_comp_plot_all_samples, fig_dir, "tax_comp_plot_all_samples.png", width = 9, height = 5)
+}
+if (exists("combined_diversity_plots")) {
+  export_plot_png(combined_diversity_plots, fig_dir, "combined_diversity_plots.png", width = 9, height = 5)
+}
+if (exists("combined_top_genera_plots")) {
+  export_plot_png(combined_top_genera_plots, fig_dir, "combined_top_genera_plots.png", width = 9, height = 5)
+}
+if (exists("top_genera_lollipop")) {
+  export_plot_png(top_genera_lollipop, fig_dir, "top_genera_lollipop.png", width = 9, height = 5)
+}
+if (exists("genus_boxplot")) {
+  export_plot_png(genus_boxplot, fig_dir, "genus_boxplot.png", width = 9, height = 5)
+}
+if (exists("top_genera_treemap")) {
+  export_plot_png(top_genera_treemap, fig_dir, "top_genera_treemap.png", width = 9, height = 5)
+}
+
+# Export a LaTeX-styled table to PNG 
+if (exists("results_all_kbl")) {
+  export_table_png(
+    latex_table = results_all_kbl,
+    table_dir = table_dir,
+    output_basename = "results_all_kbl.png"
+  )
+}
+if (exists("top_genus_summary_kbl")) {
+  export_table_png(
+    latex_table = top_genus_summary_kbl,
+    table_dir = table_dir,
+    output_basename = "top_genus_summary_kbl.png"
+  )
+}
 
 ```

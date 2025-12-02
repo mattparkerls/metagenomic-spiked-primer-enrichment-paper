@@ -493,7 +493,7 @@ wilcox_summary_kbl = wilcox_summary %>%
     "Enrichment (%)" = percent_enrichment,
     "IQR" = iqr,
     "p-value" = p_value,
-    "Effect Size (r)" = effect_r
+    "effect Size (r)" = effect_r
   ) %>% 
   select(-n_pairs) %>% 
   kable(

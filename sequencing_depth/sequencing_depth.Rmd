@@ -685,7 +685,7 @@ rare_targets_curve_prep_4 <- ggplot(det_summary_libprep_box_format_4, aes(x = de
   labs(x = "", y = "",
        title = "15 reads") +
   theme_bw()
-rare_targets_curve_prep_3
+rare_targets_curve_prep_4
 
 combined_target_curves = (rare_targets_curve_prep | rare_targets_curve_prep_2) / (rare_targets_curve_prep_3 | rare_targets_curve_prep_4)
   plot_layout(ncol = 2, nrow = 2, widths = c(1, 1, 1, 1), guides = "collect") &
@@ -711,6 +711,19 @@ if (exists("combined_curves")) {
 if (exists("combined_target_curves")) {
   export_plot_png(combined_target_curves, fig_dir, "combined_target_curves.png", width = 9, height = 5)
 }
+if (exists("rare_targets_curve_prep")) {
+  export_plot_png(rare_targets_curve_prep, fig_dir, "rare_targets_curve_prep.png", width = 9, height = 5)
+}
+if (exists("rare_targets_curve_prep_2")) {
+  export_plot_png(rare_targets_curve_prep_2, fig_dir, "rare_targets_curve_prep_2.png", width = 9, height = 5)
+}
+if (exists("rare_targets_curve_prep_3")) {
+  export_plot_png(rare_targets_curve_prep_3, fig_dir, "rare_targets_curve_prep_3.png", width = 9, height = 5)
+}
+if (exists("rare_targets_curve_prep_4")) {
+  export_plot_png(rare_targets_curve_prep_4, fig_dir, "rare_targets_curve_prep_4.png", width = 9, height = 5)
+}
+
 
 # Export a LaTeX-styled table to PNG 
 if (exists("fixed_tbl_kbl")) {
