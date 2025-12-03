@@ -375,7 +375,25 @@ random_tbl_div <- data.frame(
 # Combine in a nice list for reporting
 list(Fixed_Effects = fixed_tbl_div, Random_Effects = random_tbl_div) 
 # Optional: use kable() to print nicely in RMarkdown
-fixed_tbl_div_kbl = kable(fixed_tbl_div, digits = 3, caption = "The fixed effects of sequencing depth on microbial diversity")
+
+fixed_tbl_div_kbl = fixed_tbl_div %>% 
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    digits = 3,
+    caption = "The fixed effects of sequencing depth on microbial diversity",
+    align = "lrrr",   # adjust as needed: text left, numbers right
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("striped", "hold_position"), # polished journal look
+    position = "center",
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
+
 kable(random_tbl_div, digits = 3, caption = "Random effects (variance components) from GLMM")
 
 ```
@@ -436,31 +454,6 @@ r2_model
 # check overdispersion
 overdisp_fun(model_seq_depth)
 
-# Fit zero-inflated model for comparison
-model_zi <- glmmTMB(
-  detected ~ library_prep * depth_scaled + (1|target) + (1|sample),
-  ziformula = ~1,
-  data = det_long,
-  family = binomial
-)
-
-# Compare AIC
-AIC(model_seq_depth, model_zi)
-
-# Compare alternative sequencing depth modeling
-
-# try log transformed depth
-det_long <- det_long %>%
-  mutate(log_depth = log(depth))
-
-model_log <- glmmTMB(
-  detected ~ library_prep * log_depth + (1|target) + (1|sample),
-  data = det_long,
-  family = binomial
-)
-# print AIC comparison
-AIC(model_seq_depth, model_log)
-
 ```
 
 Viral target sequencing depth tables
@@ -481,6 +474,7 @@ fixed_tbl <- fixed_tbl %>%
     OR = exp(Estimate),
     CI_lower = exp(Estimate - 1.96*SE),
     CI_upper = exp(Estimate + 1.96*SE),
+    Percent_change = (OR - 1) * 100,                 
     Effect = recode(Effect,
                     `library_prepMSSPE` = "Library prep",
                     `depth_scaled` = "Sequencing depth",
@@ -488,6 +482,7 @@ fixed_tbl <- fixed_tbl %>%
                     )
   ) %>% 
   rename(
+    "Percent change" = Percent_change,
     "CI 25%" = CI_lower,
     "CI 75%" = CI_upper
   )
@@ -505,8 +500,26 @@ random_tbl <- data.frame(
 # Combine in a nice list for reporting
 list(Fixed_Effects = fixed_tbl, Random_Effects = random_tbl) 
 # Optional: use kable() to print nicely in RMarkdown
-fixed_tbl_kbl = kable(fixed_tbl, digits = 3, caption = "The fixed effects of sequencing depth on detecting targeted viruses")
+fixed_tbl_kbl = fixed_tbl %>% 
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    digits = 3,
+    caption = "The fixed effects of sequencing depth on detecting targeted viruses",
+    align = "lrrr",   # adjust as needed: text left, numbers right
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("striped", "hold_position"), # polished journal look
+    position = "center",
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
+
 kable(random_tbl, digits = 3, caption = "Random effects (variance components) from GLMM")
+
 
 ```
 
@@ -577,15 +590,21 @@ det_summary_wide %>%
   ) %>% 
   select(-`0.2M`,-`0.4M`,-`0.6M`,-`0.8M`,-`1M`,-`1.2M`,-`1.4M`) %>% 
   kable(
-    format = "latex",  # or "latex" if using LaTeX
-    caption = "Detection probability per viral target at varying sequencing depths",
+    format = "latex",
+    booktabs = TRUE,
+    caption = "",
     digits = 2,
+    align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    full_width = TRUE,
+    latex_options = c("striped", "hold_position"), # polished journal look
     position = "center",
-  )
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  # strong header
+  collapse_rows(columns = 1, latex_hline = "major") 
 ```
 
 ```{r}
@@ -738,6 +757,13 @@ if (exists("fixed_tbl_div_kbl")) {
     latex_table = fixed_tbl_div_kbl,
     table_dir = table_dir,
     output_basename = "fixed_tbl_div_kbl.png"
+  )
+}
+if (exists("det_summary_wide")) {
+  export_table_png(
+    latex_table = det_summary_wide,
+    table_dir = table_dir,
+    output_basename = "det_summary_wide.png"
   )
 }
 

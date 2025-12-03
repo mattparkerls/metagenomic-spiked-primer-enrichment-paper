@@ -19,6 +19,7 @@ library(dplyr)
 library(tidyr)
 library(patchwork)
 library(kableExtra)
+library(viridis)
 source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 knitr::opts_chunk$set(dev = "cairo_pdf")
 
@@ -43,45 +44,6 @@ sample_metadata = create_sample_metadata(seq_metrics, pond_samples) %>%
 # Merge the taxonomy data with metadata
 merged_data <- all_data %>%
   left_join(sample_metadata, by = "sample_name")
-
-# # Create a metadata dataframe to merge with taxon data
-# sample_metadata = seq_metrics %>% 
-#   select(sample_name, water_control, infection_class) %>% 
-#   mutate(
-#   # Library prep: MSSPE if ends with "_M"
-#   library_prep = if_else(str_ends(sample_name, "_M"), "MSSPE", "NGS"),
-# 
-#   # Remove the _M suffix to get the core sample identifier
-#   core = str_remove(sample_name, "_M$"),
-#   # Detect experiment 3 first (Cxxx_LPx)
-#   is_exp3 = str_detect(core, "C\\d+.*LP\\d+"),
-# 
-#   # Base: first sample ID (e.g. S10, PC1)
-#   base = str_extract(core, "^[A-Za-z]+\\d+"),
-# 
-#   # Append -2 or -3 only if not exp3
-#   suffix = case_when(
-#     !is_exp3 & str_detect(core, "_2$") ~ "-2",
-#     !is_exp3 & str_detect(core, "_3$") ~ "-3",
-#     TRUE ~ ""
-#   ),
-# 
-#   base_sample = tolower(paste0(base, suffix)),
-# 
-#   # group slurry vs environmental samples
-#   sample_type = if_else(base_sample %in% pond_samples, "environmental", "slurry"),
-#   
-#   experiment = case_when(
-#     is_exp3 ~ 3,
-#     str_detect(core, "_3$") ~ 2,
-#     TRUE ~ 1
-#   )
-# ) %>%
-# select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
-# 
-# # Merge the taxonomy data with metadata
-# merged_data <- all_data %>%
-#   left_join(sample_metadata, by = "sample_name")
 
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
@@ -134,6 +96,7 @@ sampletype_composition <- taxa_table %>%
 # Visualize composition by library prep method
 tax_comp_libprep = ggplot(phylum_composition, aes(x = library_prep, y = relative_abundance, fill = category)) +
   geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
   theme_minimal() +
   labs(title = "a",
        x = "", 
@@ -143,6 +106,7 @@ tax_comp_libprep = ggplot(phylum_composition, aes(x = library_prep, y = relative
 
 tax_comp_sampletype = ggplot(sampletype_composition, aes(x = sample_type, y = relative_abundance, fill = category)) +
   geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
   theme_minimal() +
   labs(title = "b",
        x = "", 
@@ -288,6 +252,7 @@ diversity_tbl <- diversity_tbl %>%
 # Compare alpha diversity between library prep methods
 shannon_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Shannon, color = library_prep)) +
   geom_boxplot() +
+  scale_fill_viridis(option = "viridis", direction = -1) +
   theme_minimal() +
   labs(title = "a",
        x = "", 
@@ -296,6 +261,7 @@ shannon_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Shannon, 
 
 simpson_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Simpson, color = library_prep)) +
   geom_boxplot() +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = 1) +
   theme_minimal() +
   labs(title = "b",
        x = "", 
@@ -304,6 +270,7 @@ simpson_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Simpson, 
 
 rich_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Richness, color = library_prep)) +
   geom_boxplot() +
+  scale_fill_viridis(discrete = TRUE, option = "mako", direction = 1) +
   theme_minimal() +
   labs(title = "c",
        x = "", 
@@ -330,7 +297,8 @@ virus_data <- species_data_filtered %>%
 genus_data <- get_genus_info_batch(virus_data$tax_id, batch_size = 100)
 
 # Combine with original dataframe
-virus_data <- cbind(virus_data, genus_data) %>% 
+virus_data <- cbind(virus_data, genus_data) %>%
+  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|"))) %>% 
   filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus","Alphapapillomavirus","Nicoomyvirus","Myrnavirus")) # filter out known phages
 
 ```
@@ -556,6 +524,7 @@ phylum_composition_samples <- taxa_table %>%
 # Visualize composition by sample
 tax_comp_plot_all_samples = ggplot(phylum_composition_samples, aes(x = base_sample, y = relative_abundance, fill = category)) +
   geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
   theme_minimal() +
   labs(title = "Taxonomic Composition across All Samples",
        x = "Sample", 
@@ -563,6 +532,27 @@ tax_comp_plot_all_samples = ggplot(phylum_composition_samples, aes(x = base_samp
        fill = "Phylum") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 tax_comp_plot_all_samples
+
+```
+
+```{r}
+genus_composition_all_samples <- taxa_table_genus %>%
+  group_by(base_sample,genus_name) %>% 
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  filter(total_abundance > 30) %>% 
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Visualize genera composition by sample
+genus_comp_plot_all_samples = ggplot(genus_composition_all_samples, aes(x = base_sample, y = relative_abundance, fill = genus_name)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis") +
+  theme_minimal() +
+  labs(title = "Genus Composition across All Samples",
+       x = "Sample", 
+       y = "Relative Abundance (%)",
+       fill = "Genera") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+genus_comp_plot_all_samples
 
 ```
 
@@ -583,6 +573,9 @@ if (exists("combined_tax_plots")) {
 }
 if (exists("tax_comp_plot_all_samples")) {
   export_plot_png(tax_comp_plot_all_samples, fig_dir, "tax_comp_plot_all_samples.png", width = 9, height = 5)
+}
+if (exists("genus_comp_plot_all_samples")) {
+  export_plot_png(genus_comp_plot_all_samples, fig_dir, "genus_comp_plot_all_samples.png", width = 9, height = 5)
 }
 if (exists("combined_diversity_plots")) {
   export_plot_png(combined_diversity_plots, fig_dir, "combined_diversity_plots.png", width = 9, height = 5)

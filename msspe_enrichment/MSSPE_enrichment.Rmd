@@ -493,13 +493,13 @@ wilcox_summary_kbl = wilcox_summary %>%
     "Enrichment (%)" = percent_enrichment,
     "IQR" = iqr,
     "p-value" = p_value,
-    "effect Size (r)" = effect_r
+    "effect size (r)" = effect_r
   ) %>% 
   select(-n_pairs) %>% 
   kable(
     format = "latex",  # or "latex" if using LaTeX
     booktabs = TRUE,
-    caption = "Genome coverage increase across all paired samples per viral target",
+    caption = "",
     digits = 3,
     align = "lrrr",   # adjust as needed: text left, numbers right
     format.args = list(big.mark = ",")
@@ -537,9 +537,9 @@ all_target_cov_plot = ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth))
   labs(
     x = "",
     y = "Increase in genome coverage (%)",
-    title = "Genome Coverage Enrichment"
+    title = ""
   ) +
-  theme_minimal(base_size = 14) +
+  theme_bw() +
   theme(
     legend.position = "none",
     panel.grid.major.x = element_blank(),
@@ -818,8 +818,8 @@ if (exists("alltarget_boxplot")) {
 if (exists("combined_enrichment_plot")) {
   export_plot_png(combined_enrichment_plot, fig_dir, "combined_enrichment_plot.png", width = 10, height = 5)
 }
-if (exists("coverage_enrichment_plot")) {
-  export_plot_png(coverage_enrichment_plot, fig_dir, "coverage_enrichment_by_virus.png", width = 9, height = 5)
+if (exists("all_target_cov_plot")) {
+  export_plot_png(all_target_cov_plot, fig_dir, "all_target_cov_plot.png", width = 9, height = 5)
 }
 if (exists("log2fc_plot")) {
   export_plot_png(log2fc_plot, fig_dir, "overall_enrichment_boxplot.png", width = 5, height = 5)

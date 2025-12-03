@@ -132,7 +132,9 @@ sample_totals <- species_data %>%
   )
 
 virus_data <- species_data %>%
-  filter(category == "viruses", is_phage == "false") 
+  filter(category == "viruses", is_phage == "false") %>% 
+  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|")))
+
 
 viral_percentages <- virus_data %>%
   drop_na(base_sample) %>%
