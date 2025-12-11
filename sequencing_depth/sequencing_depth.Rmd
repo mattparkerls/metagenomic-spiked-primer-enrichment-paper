@@ -55,6 +55,13 @@ all_data_species <- merged_data %>%
   filter(experiment == 3) %>%  # filter in specific experiments
   filter(water_control == "No") %>% 
   filter(infection_class != "Definite") # filter out positive controls
+
+# Recode values for publication
+all_data_species = all_data_species %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  ) 
 ```
 
 ```{r}

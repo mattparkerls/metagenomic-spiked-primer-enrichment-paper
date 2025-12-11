@@ -20,6 +20,7 @@ library(tidyr)
 library(patchwork)
 library(kableExtra)
 library(viridis)
+library(superheat)
 source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
 knitr::opts_chunk$set(dev = "cairo_pdf")
 
@@ -50,6 +51,13 @@ all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
   filter(water_control == "No") %>% 
   filter(infection_class != "Definite") # filter out positive controls
+
+# Recode values for publication
+all_data_species = all_data_species %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  ) 
 ```
 
 Positive Inclusion Criteria
@@ -57,7 +65,6 @@ Positive Inclusion Criteria
 species_data_filtered = all_data_species %>% 
   filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
   filter(nt_alignment_length > 50)
-  #filter(sample_type == "slurry") # filtering by sample type
 ```
 
 
@@ -77,48 +84,34 @@ phylum_composition_overall <- taxa_table %>%
 
 # Compare library prep at different taxonomic levels (e.g., phylum level)
 phylum_composition <- taxa_table %>%
-  group_by(category, library_prep) %>%
+  group_by(category, library_prep, sample_type) %>%
   summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
-  group_by(library_prep) %>%
+  group_by(library_prep, sample_type) %>%
   mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
 
-sampletype_composition <- taxa_table %>%
-  mutate(
-    sample_type = recode(sample_type, `environmental` = "wastewater")
-  ) %>% 
-  group_by(category, sample_type) %>%
-  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
-  group_by(sample_type) %>%
-  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
 ```
 
 ```{r}
 # Visualize composition by library prep method
 tax_comp_libprep = ggplot(phylum_composition, aes(x = library_prep, y = relative_abundance, fill = category)) +
-  geom_bar(stat = "identity") +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ sample_type) +
   scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
   theme_minimal() +
-  labs(title = "a",
-       x = "", 
-       y = "Relative Abundance (%)",
-       fill = "Phylum") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  labs(
+    title = "",
+    x = "",
+    y = "Relative Abundance (%)",
+    fill = "Biological grouping"
+  ) +
+  theme()
+tax_comp_libprep
 
-tax_comp_sampletype = ggplot(sampletype_composition, aes(x = sample_type, y = relative_abundance, fill = category)) +
-  geom_bar(stat = "identity") +
-  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
-  theme_minimal() +
-  labs(title = "b",
-       x = "", 
-       y = "Relative Abundance (%)",
-       fill = "Phylum") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-combined_tax_plots = (tax_comp_libprep | plot_spacer() | tax_comp_sampletype) +
-    plot_layout(ncol = 3, widths = c(2, 0.2, 2))
-
-combined_tax_plots
+# combined_tax_plots = (tax_comp_libprep | plot_spacer() | tax_comp_sampletype) +
+#     plot_layout(ncol = 3, widths = c(2, 0.2, 2))
+# 
+# combined_tax_plots
 ```
 
 Diversity
@@ -555,6 +548,115 @@ genus_comp_plot_all_samples = ggplot(genus_composition_all_samples, aes(x = base
 genus_comp_plot_all_samples
 
 ```
+Superheat microbial overlap plotting
+```{r}
+name_targets = c(
+  "PBoV",   # Porcine bocavirus
+  "PCV",    # Porcine circovirus 2
+  "PKV",    # Porcine kobuvirus / Aichivirus C
+  "EV-G",   # Porcine enterovirus G
+  "PTeV",   # Porcine teschovirus A
+  "PAstV",  # Porcine astrovirus 4
+  "PSapoV", # Porcine sapovirus
+  "PSapeV", # Porcine sapelovirus
+  "HPV18"   # Human papillomavirus 7/18
+)
+
+# Add standardized name groups using helper function
+viral_genera = add_viral_name_groups(taxa_table_genus)
+
+# get proportion of time genus is detected in each sample
+viral_genera = viral_genera %>% 
+  left_join(virus_sample_per, by = "genus_name")
+
+# Create heatmap structure 
+genus_composition_heat <- viral_genera %>%
+  mutate(
+    viral_target = str_detect(name_group, regex(paste0("\b(", paste(name_targets, collapse = "|"), ")\b"), ignore_case = TRUE))
+  ) %>% 
+  filter(nt_rpm > 8) %>% 
+  group_by(library_prep, genus_name) %>% 
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  group_by(library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>% 
+  ungroup() %>%
+  select(genus_name, library_prep, relative_abundance) %>%
+  pivot_wider(names_from = library_prep,
+              values_from = relative_abundance,
+              values_fill = 0) 
+
+heat_mat <- genus_composition_heat %>%
+  column_to_rownames("genus_name") %>%
+  as.matrix()
+
+perc_vec <- viral_genera %>%
+  distinct(genus_name, perc_of_samples) %>%
+  filter(genus_name %in% rownames(heat_mat)) %>%
+  slice(match(rownames(heat_mat), genus_name)) %>%
+  pull(perc_of_samples)
+
+png("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures/superheat.png", height = 1200, width = 1000)
+superheat(
+  heat_mat,
+  row.title = "Viral Genus",
+  pretty.order.rows = TRUE,
+  pretty.order.cols = TRUE,
+  legend.height = 0.3,
+  legend.width = 3.5,
+  legend.text.size = 14,
+  yr = perc_vec,
+  yr.plot.type = "bar",
+  yr.axis.name = "% samples where genus detected",
+  yr.bar.col = "grey40"  
+  )
+dev.off()
+
+```
+
+```{r}
+
+viral_genera2 <- viral_genera %>% 
+  left_join(virus_sample_per, by = "genus_name")
+
+genus_composition_heat <- viral_genera2 %>%
+  mutate(
+    viral_target = str_detect(name_group, regex(paste0("\b(", paste(name_targets, collapse = "|"), ")\b"), ignore_case = TRUE))
+  ) %>% 
+  filter(nt_rpm > 8) %>% 
+  group_by(library_prep, genus_name) %>% 
+  summarize(total_abundance = sum(nt_rpm), .groups = "drop") %>%
+  group_by(library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>% 
+  ungroup() %>%
+  select(genus_name, library_prep, relative_abundance) %>%
+  pivot_wider(
+    names_from  = library_prep,
+    values_from = relative_abundance,
+    values_fill = 0
+  )
+
+heat_mat <- genus_composition_heat %>%
+  column_to_rownames("genus_name") %>%
+  as.matrix()
+
+perc_vec <- viral_genera2 %>%
+  distinct(genus_name, perc_of_samples) %>%
+  filter(genus_name %in% rownames(heat_mat)) %>%
+  slice(match(rownames(heat_mat), genus_name)) %>%
+  pull(perc_of_samples)
+
+superheat(
+  X = heat_mat,
+  pretty.order.rows = TRUE,
+  pretty.order.cols = TRUE,
+  heat.pal = viridisLite::viridis(20),
+  yr = perc_vec,
+  yr.plot.type = "bar",
+  yr.axis.name = "% samples where genus detected",
+  yr.bar.col = "grey40"     
+)
+
+```
 
 EXPORT ALL FIGURES AND TABLES FTW
 ```{r export_paths, include=FALSE}
@@ -568,8 +670,8 @@ cat("\\captionsetup{labelformat=empty}")
 ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
 
 # Plots
-if (exists("combined_tax_plots")) {
-  export_plot_png(combined_tax_plots, fig_dir, "combined_tax_plots.png", width = 9, height = 5)
+if (exists("tax_comp_libprep")) {
+  export_plot_png(tax_comp_libprep, fig_dir, "tax_comp_libprep.png", width = 9, height = 5)
 }
 if (exists("tax_comp_plot_all_samples")) {
   export_plot_png(tax_comp_plot_all_samples, fig_dir, "tax_comp_plot_all_samples.png", width = 9, height = 5)
@@ -591,6 +693,9 @@ if (exists("genus_boxplot")) {
 }
 if (exists("top_genera_treemap")) {
   export_plot_png(top_genera_treemap, fig_dir, "top_genera_treemap.png", width = 9, height = 5)
+}
+if (exists("genus_heatmap")) {
+  export_plot_png(genus_heatmap, fig_dir, "genus_heatmap.png", width = 9, height = 5)
 }
 
 # Export a LaTeX-styled table to PNG 

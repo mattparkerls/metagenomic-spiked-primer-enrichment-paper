@@ -64,11 +64,19 @@ pcv_data = merged_data %>%
 # Filter to include only species level (tax_level == 1) to avoid duplication
 all_data_species <- merged_data %>%
   filter(tax_level == 1) %>% 
+  #filter(experiment == 2 | experiment == 3) %>% 
   filter(nt_rpm >= 1) %>% # so zeros don't skew comparison
   filter(water_control == "No") %>%   # filter out Negative Controls
   filter(infection_class != "Definite") %>%   # filter out positive control samples
-  add_row(hpv_data) # but keep hpv data 
+  add_row(hpv_data)  # but keep hpv data from exp 1 & 2
+  #add_row(pcv_data) # and pcv from exp 1
 
+# Recode values for publication
+all_data_species = all_data_species %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  ) 
 ```
 
 
@@ -109,8 +117,8 @@ only_viral_targets = all_viruses %>%
   ) %>%
   mutate(
     MSSPE = replace_na(MSSPE, 0.1), # Set NAs to 0.1 for non-detections
-    NGS   = replace_na(NGS, 0.1),   # Set NAs to 0.1 for non-detections
-    rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
+    mNGS   = replace_na(mNGS, 0.1),   # Set NAs to 0.1 for non-detections
+    rpm_enrichment = (`MSSPE` + eps)/(`mNGS` + eps),
     log2FC = log2(rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
@@ -290,7 +298,7 @@ cat("\\captionsetup{labelformat=empty}")
 viral_target_enrichment_summary = only_viral_targets %>% 
   group_by(name_group) %>% 
   summarise(
-    rpm_ngs = round(mean(NGS, na.rm = TRUE),2), # mean
+    rpm_mngs = round(mean(mNGS, na.rm = TRUE),2), # mean
     rpm_msspe = round(mean(MSSPE, na.rm = TRUE),2), #mean
     median_enrichment = round(median(rpm_enrichment, na.rm = TRUE),2),
     mean_enrichment = round(mean(rpm_enrichment, na.rm = TRUE),2),
@@ -303,10 +311,10 @@ viral_target_enrichment_summary = only_viral_targets %>%
     n_pairs = n(),
     p_value = {
       # ensure both vectors are aligned and remove any NA pairs
-      paired_data <- na.omit(data.frame(ngs = NGS, msspe = MSSPE))
+      paired_data <- na.omit(data.frame(mngs = mNGS, msspe = MSSPE))
       
       if(nrow(paired_data) > 1) {
-        round(wilcox.test(paired_data$ngs,
+        round(wilcox.test(paired_data$mngs,
                     paired_data$msspe,
                     alternative = "two.sided",
                     paired = TRUE)$p.value, 3)
@@ -315,11 +323,11 @@ viral_target_enrichment_summary = only_viral_targets %>%
       }
     },
   effect_r = {
-      paired_data <- na.omit(data.frame(ngs = NGS, msspe = MSSPE))
+      paired_data <- na.omit(data.frame(mngs = mNGS, msspe = MSSPE))
       if(nrow(paired_data) > 1) {
         long_df <- paired_data %>%
-          pivot_longer(cols = c(ngs, msspe), names_to = "prep", values_to = "value") %>%
-          mutate(prep = factor(prep, levels = c("ngs","msspe")))
+          pivot_longer(cols = c(mngs, msspe), names_to = "prep", values_to = "value") %>%
+          mutate(prep = factor(prep, levels = c("mngs","msspe")))
         round(wilcox_effsize(long_df, value ~ prep, paired = TRUE)$effsize, 3)
       } else NA_real_
     }
@@ -331,7 +339,7 @@ viral_target_enrichment_summary = only_viral_targets %>%
 viral_target_table <- viral_target_enrichment_summary %>%
   rename(
     "Virus" = name_group,
-    "rPM (NGS)" = rpm_ngs,
+    "rPM (mNGS)" = rpm_mngs,
     "rPM (MSSPE)" = rpm_msspe,
     "Median Fold Change" = median_enrichment,
     "Mean Fold Change" = mean_enrichment,
@@ -488,9 +496,9 @@ wilcox_summary_kbl = wilcox_summary %>%
   ) %>% 
   rename(
     "Virus" = virus,
-    "% coverage (NGS)" = mean_ngs,
+    "% coverage (mNGS)" = mean_ngs,
     "% coverage (MSSPE)" = mean_msspe,
-    "Enrichment (%)" = percent_enrichment,
+    "Increase (%)" = percent_enrichment,
     "IQR" = iqr,
     "p-value" = p_value,
     "effect size (r)" = effect_r
@@ -568,8 +576,8 @@ overall_tbl_summary = all_viruses %>%
   ) %>%
   mutate(
     MSSPE = replace_na(MSSPE, 0.1), # Set NAs to 0 for non-detections
-    NGS   = replace_na(NGS, 0.1),   # Set NAs to 0 for non-detections
-    rpm_enrichment = (`MSSPE` + eps)/(`NGS` + eps),
+    mNGS   = replace_na(mNGS, 0.1),   # Set NAs to 0 for non-detections
+    rpm_enrichment = (`MSSPE` + eps)/(`mNGS` + eps),
     log2FC = log2(rpm_enrichment),
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
@@ -590,7 +598,7 @@ round(quantile(overall_tbl_summary$rpm_enrichment, 0.75, na.rm = TRUE), 2)
 
 # Paired Wilcoxon test across all samples
 wilcox_res <- wilcox.test(
-  overall_tbl_summary$NGS,
+  overall_tbl_summary$mNGS,
   overall_tbl_summary$MSSPE,
   paired = TRUE,
   alternative = "two.sided"
@@ -609,9 +617,9 @@ log2fc_plot = ggplot(overall_tbl_summary, aes(x = "", y = rpm_enrichment)) +
   labs(
     x = "",
     y = "Fold enrichment (log10)",
-    title = "a"
+    title = ""
   ) +
-  theme_minimal(base_size = 14) +
+  theme_bw() +
   theme(
     panel.grid.major.x = element_blank(),
     legend.position = "none",
@@ -662,10 +670,10 @@ cov_plot = ggplot(paired_tbl, aes(x = "", y = enrichment_breadth)) +
            fontface = "italic", size = 4) +
   labs(
     x = "",
-    y = "Genome coverage enrichment (%)",
-    title = "b"
+    y = "Genome coverage increase (%)",
+    title = ""
   ) +
-  theme_minimal(base_size = 14) +
+  theme_bw() +
   theme(
     panel.grid.major.x = element_blank(),
     legend.position = "none",
@@ -713,17 +721,17 @@ expanded <- expand_grid(
 results_libprep <- expanded %>%
   group_by(name_group, sample_name) %>%
   summarise(
-    NGS = detected[library_prep == "NGS"],
+    mNGS = detected[library_prep == "mNGS"],
     MSSPE = detected[library_prep == "MSSPE"],
     .groups = "drop"
   ) %>%
   group_by(name_group) %>%
   summarise(
-    mcnemar = list(mcnemar.test(table(NGS, MSSPE))),
+    mcnemar = list(mcnemar.test(table(mNGS, MSSPE))),
     p_value = mcnemar[[1]]$p.value,
     # Compute discordant counts
-    b = sum(NGS == 0 & MSSPE == 1),  # detected by MSSPE only
-    c = sum(NGS == 1 & MSSPE == 0),  # detected by NGS only
+    b = sum(mNGS == 0 & MSSPE == 1),  # detected by MSSPE only
+    c = sum(mNGS == 1 & MSSPE == 0),  # detected by NGS only
 
     # Odds ratio (b/c)
     odds_ratio = ifelse(c == 0, NA, b / c),
