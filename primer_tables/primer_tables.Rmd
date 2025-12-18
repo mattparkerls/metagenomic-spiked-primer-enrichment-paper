@@ -28,25 +28,23 @@ primer_data <- read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/d
 
 primer_tbl = primer_data %>% 
   mutate(
-    primer_length = 15, 
     num_prim_kb = round(num_prim_kb, 2),
     num_ref_kb = round(num_ref_kb, 2),
     virus = recode(virus,
-      `pastv` = "PAstV",
-      `ev-g` = "EV-G",
-      `hpv18` = "HPV18",
-      `pbov` = "PBoV",
-      `pcv` = "PCV",
-      `psapev` = "PSapeV",
-      `ptev` = "PTeV",
-      `pkv` = "PKV",
-      `psapov` = "PSapoV",
+      `pastv` = "PAstV*",
+      `ev-g` = "EV-G*",
+      `hpv18` = "HPV18*",
+      `pbov` = "PBoV*",
+      `pcv` = "PCV*",
+      `psapev` = "PSapeV*",
+      `ptev` = "PTeV*",
+      `pkv` = "PKV*",
+      `psapov` = "PSapoV*",
     )
   ) %>% 
   arrange(virus) %>% 
-  select(virus, primer_length, num_primers, num_fwd, num_rev, num_refs, num_prim_kb, num_ref_kb) %>% 
+  select(virus, Name, num_primers, num_fwd, num_rev, num_refs, num_prim_kb, num_ref_kb) %>% 
   rename(
-    "Primer length (nt)" = primer_length,
     "Virus" = virus,
     "Forward" = num_fwd,
     "Reverse" = num_rev,
@@ -64,9 +62,9 @@ primer_tbl = primer_data %>%
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    latex_options = c("striped", "hold_position"), # polished journal look
+    latex_options = c("striped", "hold_position","scale_down"), # polished journal look
     position = "center",
-    full_width = TRUE,
+    full_width = FALSE,
     font_size = 9
   ) %>%
   row_spec(0, bold = TRUE) %>%  # strong header

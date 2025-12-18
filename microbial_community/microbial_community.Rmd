@@ -12,9 +12,9 @@ output:
 ---
 
 ```{r}
-library(tidyverse)  # For data manipulation and visualization
-library(vegan)      # For diversity analyses
-library(ggplot2)    # For enhanced visualizations
+library(tidyverse)  
+library(vegan)      
+library(ggplot2)    
 library(dplyr)
 library(tidyr)
 library(patchwork)
@@ -284,15 +284,34 @@ Top Viral Genera
 virus_data <- species_data_filtered %>%
   filter(category == "viruses") %>% 
   filter(is_phage == "false") %>%  # filter out phages as marked by CZID
-  filter(genus_tax_id != -200)
+  filter(genus_tax_id != -200) %>% 
+  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|"))) 
 
 # Add genus columns to the dataframe
 genus_data <- get_genus_info_batch(virus_data$tax_id, batch_size = 100)
 
 # Combine with original dataframe
-virus_data <- cbind(virus_data, genus_data) %>%
-  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|"))) %>% 
-  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus","Alphapapillomavirus","Nicoomyvirus","Myrnavirus")) # filter out known phages
+virus_data <- cbind(virus_data, genus_data) %>% 
+  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus",
+                            "Alphapapillomavirus","Nicoomyvirus","Myrnavirus","Lillamyvirus","Kahnovirus",
+                            "Moumouvirus","Kehishuvirus","Gamaleyavirus","Tupanvirus","Audreyjarvisvirus",
+                            "Mimivirus","Muminvirus","Immutovirus","Buhlduvirus","Phapecoctavirus",
+                            "Samwavirus","Denvervirus","Ferozepurvirus","Wotdevirus",
+                            "Miltoncavirus","Melianvirus","Cotonvirus","Justusliebigvirus","Tequatrovirus",
+                            "Pawinskivirus","Cohcovirus","Tanisvirus","Matsuvirus","Kenoshavirus","Pacinivirus",
+                            "Cedarrivervirus","Eurybiavirus","Kagunavirus","Lahexavirus",
+                            "Marfavirus","Popoffvirus","Quivirus","Skogvirus","Tepukevirus","Traversvirus",
+                            "Zhangjivirus","Aurodevirus","Lambovirus","Pahexavirus","Skunavirus",
+                            "Tequatrovirus","Beenievirus","Brujitavirus","Lebriduvirus","Nevevirus","Pamirivirus",
+                            "Rahariannevirus","Segzyvirus","Bertelyvirus","Buchananvirus","Ferozepurvirus","Kehishuvirus",
+                            "Matsuvirus","Moabitevirus","Nieuwekanaalvirus","Serwervirus","Cimandefvirus","Denvervirus",
+                            "Nipunavirus","Pawinskivirus","Sextaecvirus","Finchvirus","Haetaevirus","Ittyvirus","Muminvirus",
+                            "Saltrevirus","Shandongvirus","Cohcovirus","Elemovirus","Fremauxvirus","Hattifnattvirus","Juiceboxvirus",
+                            "Mydovirus","Omegavirus","Phapecoctavirus","Samwavirus","Shirahamavirus","Stormageddonvirus",
+                            "Vicoquintavirus","Bihckevirus","Elmenteitavirus","Henunavirus","Justusliebigvirus","Menderavirus",
+                            "Myradeevirus","Onyinyevirus","Plasmavirus","Shuimuvirus","Swiduovirus","Vipetofemvirus","Archimedesvirus",
+                            "Bixzunavirus","Gamaleyavirus","Jwalphavirus","Kumottavirus","Miltoncavirus","Plateaulakevirus",
+                            "Skatevirus","Tanisvirus","Wotdevirus","Buchavirus")) # filter out known phages
 
 ```
 
@@ -567,23 +586,34 @@ viral_genera = add_viral_name_groups(taxa_table_genus)
 
 # get proportion of time genus is detected in each sample
 viral_genera = viral_genera %>% 
-  left_join(virus_sample_per, by = "genus_name")
+  left_join(virus_sample_per, by = "genus_name") %>% 
+    filter(!genus_name %in% c("Orthopicobirnavirus","Protoambidensovirus","Tobamovirus","Carlavirus","Sobemovirus",
+                            "Kratosvirus","Comovirus","Cripavirus","Marnavirus","Potyvirus",
+                            "Aparavirus","Iteradensovirus","Betaentomopoxvirus","Porprismacovirus",
+                            "Iflavirus","Cucumovirus","Narnavirus","Klosneuvirus","Nauglamirvirus",
+                            "Mitovirus","Machlomovirus","Prasinovirus","Betapartitivirus","Alphabaculovirus",
+                            "Chlorovirus","Fadolivirus","Tritimovirus","Alphachrysovirus","Deltaentomopoxvirus",
+                            "Indivirus","Rheavirus","Solendovirus","Tethysvirus","Tupanvirus","Alphaendornavirus",
+                            "Fijivirus","Megavirus","Moumouvirus","Prasinovirus","Sopolycivirus","Theiavirus",
+                            "Unuamitovirus","Alphapithovirus","Betapartitivirus","Machlomovirus","Oceanusvirus",
+                            "Pefuambidensovirus","Stangrhavirus","Tobamovirus","Ampelovirus","Biavirus","Aparavirus",
+                            "Kratosvirus","Marafivirus","Prymnesiovirus","Totivirus","Catovirus","Cotonvirus",
+                            "Crinivirus","Nepovirus","Fabavirus","Gammacarmovirus","Hokovirus")) # filter out non vertebrae viruses
 
 # Create heatmap structure 
 genus_composition_heat <- viral_genera %>%
   mutate(
     viral_target = str_detect(name_group, regex(paste0("\b(", paste(name_targets, collapse = "|"), ")\b"), ignore_case = TRUE))
   ) %>% 
-  filter(nt_rpm > 8) %>% 
-  group_by(library_prep, genus_name) %>% 
-  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
-  group_by(library_prep) %>%
-  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>% 
+  filter(nt_rpm > 1) %>% 
+  group_by(sample_type, library_prep, genus_name) %>%
+  summarize(total_abundance = sum(nt_rpm), .groups="drop") %>%
+  group_by(sample_type, library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>%
   ungroup() %>%
-  select(genus_name, library_prep, relative_abundance) %>%
-  pivot_wider(names_from = library_prep,
-              values_from = relative_abundance,
-              values_fill = 0) 
+  mutate(lp = paste(library_prep, sample_type, sep="-")) %>%
+  select(genus_name, lp, relative_abundance) %>%
+  pivot_wider(names_from = lp, values_from = relative_abundance, values_fill = 0)
 
 heat_mat <- genus_composition_heat %>%
   column_to_rownames("genus_name") %>%
@@ -595,11 +625,16 @@ perc_vec <- viral_genera %>%
   slice(match(rownames(heat_mat), genus_name)) %>%
   pull(perc_of_samples)
 
-png("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures/superheat.png", height = 1200, width = 1000)
+# order by percentage of samples
+ord <- order(perc_vec, decreasing = FALSE)
+heat_mat <- heat_mat[ord, , drop = FALSE]
+perc_vec <- perc_vec[ord]
+
+png("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures/superheat.png", height = 1200, width = 1050)
 superheat(
   heat_mat,
   row.title = "Viral Genus",
-  pretty.order.rows = TRUE,
+  #pretty.order.rows = TRUE,
   pretty.order.cols = TRUE,
   legend.height = 0.3,
   legend.width = 3.5,
@@ -607,54 +642,77 @@ superheat(
   yr = perc_vec,
   yr.plot.type = "bar",
   yr.axis.name = "% samples where genus detected",
-  yr.bar.col = "grey40"  
+  yr.bar.col = "grey40",
+  heat.lim = c(0.00001,100)
   )
 dev.off()
 
+
+subset_ww_m <- heat_mat[heat_mat[ , "MSSPE-wastewater"] > 0.0001, ]
+nrow(subset_ww_m)
+
+subset_ww <- heat_mat[heat_mat[ , "mNGS-wastewater"] > 0.0001, ]
+nrow(subset_ww)
+
+subset_s_m <- heat_mat[heat_mat[ , "MSSPE-slurry"] > 0.0001, ]
+nrow(subset_s_m)
+
+subset_s <- heat_mat[heat_mat[ , "mNGS-slurry"] > 0.0001, ]
+nrow(subset_s)
 ```
 
+Get DNA and RNA Vertebrae infecting pathogens
 ```{r}
+ghost_data = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/filter_known_pathogens.csv", stringsAsFactors = FALSE)
 
-viral_genera2 <- viral_genera %>% 
-  left_join(virus_sample_per, by = "genus_name")
-
-genus_composition_heat <- viral_genera2 %>%
-  mutate(
-    viral_target = str_detect(name_group, regex(paste0("\b(", paste(name_targets, collapse = "|"), ")\b"), ignore_case = TRUE))
-  ) %>% 
-  filter(nt_rpm > 8) %>% 
-  group_by(library_prep, genus_name) %>% 
-  summarize(total_abundance = sum(nt_rpm), .groups = "drop") %>%
-  group_by(library_prep) %>%
-  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>% 
-  ungroup() %>%
-  select(genus_name, library_prep, relative_abundance) %>%
-  pivot_wider(
-    names_from  = library_prep,
-    values_from = relative_abundance,
-    values_fill = 0
-  )
-
-heat_mat <- genus_composition_heat %>%
-  column_to_rownames("genus_name") %>%
-  as.matrix()
-
-perc_vec <- viral_genera2 %>%
-  distinct(genus_name, perc_of_samples) %>%
-  filter(genus_name %in% rownames(heat_mat)) %>%
-  slice(match(rownames(heat_mat), genus_name)) %>%
-  pull(perc_of_samples)
-
-superheat(
-  X = heat_mat,
-  pretty.order.rows = TRUE,
-  pretty.order.cols = TRUE,
-  heat.pal = viridisLite::viridis(20),
-  yr = perc_vec,
-  yr.plot.type = "bar",
-  yr.axis.name = "% samples where genus detected",
-  yr.bar.col = "grey40"     
+dna_virs = c(
+  "Hudisavirus",
+  "mastadenovirus",
+  "Circo",
+  "porprismacovirus",
+  "circular",
+  "bocavirus"
 )
+
+rna_virs = c(
+  "Astrovirus",
+  "picobirnavirus",
+  "Enterovirus",
+  "torovirus",
+  "Mamastrovirus",
+  "Posavirus",
+  "Rotavirus",
+  "Sapelovirus",
+  "Teschovirus",
+  "Bastrovirus",
+  "Husavirus",
+  "torovirus",
+  "Sapporo"
+)
+
+ghost_data_filtered = ghost_data %>% 
+  filter(!str_detect(name, paste(c("Alphapapillomavirus","Parvovirus"), collapse = "|"))) %>% 
+  mutate(
+    is_dna = str_detect(
+      name,
+      regex(paste(dna_virs, collapse = "|"), ignore_case = TRUE)
+    ),
+    is_rna = str_detect(
+      name,
+      regex(paste(rna_virs, collapse = "|"), ignore_case = TRUE)
+    )
+  ) %>% 
+  select(name, is_dna, is_rna)
+
+# get % of livestock or human hosts
+dim(table(ghost_data_filtered$name)) / dim(table(virus_data$name))
+
+# % of dna viruses
+length(table(ghost_data_filtered$name[ghost_data_filtered$is_dna==TRUE])) / dim(table(ghost_data_filtered$name))
+
+# % of rna viruses
+length(table(ghost_data_filtered$name[ghost_data_filtered$is_rna==TRUE])) / dim(table(ghost_data_filtered$name))
+
 
 ```
 
@@ -715,3 +773,52 @@ if (exists("top_genus_summary_kbl")) {
 }
 
 ```
+
+```{r}
+# Load required library
+library(stringr)
+
+# Set your folder path
+folder_path <- "/Users/mattparker/.Trash/illumina/Run1/RR226_1" 
+
+# Get all fastq.gz files
+files <- list.files(folder_path, pattern = "\\.fastq\\.gz$", full.names = FALSE)
+
+print(paste("Found", length(files), "FASTQ files"))
+
+# Extract sample names and read type (R1/R2)
+# Pattern: everything before _R1_ or _R2_
+file_info <- data.frame(
+  file_name = files,
+  sample_name = str_replace(files, "_R[12]_001\\.fastq\\.gz$", ""),  # Remove _R1/R2 and extension
+  read_type = str_extract(files, "R[12]")  # Extract R1 or R2
+)
+
+# Pivot to wide format with R1 and R2 columns
+fastq_table <- file_info %>%
+  select(sample_name, read_type, file_name) %>%
+  tidyr::pivot_wider(
+    names_from = read_type,
+    values_from = file_name,
+    names_prefix = ""
+  )
+
+# Display the result
+print(fastq_table)
+
+# Example: Join with another table
+# Assuming you have another table like this:
+other_table <- read.csv("/Users/mattparker/downloads/file_names_sra.csv")
+
+# Perform the join
+final_table <- left_join(other_table, fastq_table, by = "sample_name")
+
+# Or if you want the other table first:
+# final_table <- left_join(other_table, fastq_table, by = "sample")
+
+print(final_table)
+
+# Optional: Export to CSV
+write.csv(final_table, "/Users/mattparker/downloads/fastq_file_table.csv", row.names = FALSE)
+```
+

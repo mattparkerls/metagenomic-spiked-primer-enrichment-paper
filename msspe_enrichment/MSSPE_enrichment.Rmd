@@ -142,7 +142,7 @@ mean_df <- only_viral_targets %>%
 alltarget_boxplot <- ggplot(only_viral_targets, aes(x = name_group, y = rpm_enrichment)) +
   geom_boxplot(width = 0.8, outlier.shape = 21, outlier.fill = "white", alpha = 0.6, width = 0.6, color = "black") +
   scale_y_log10() +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#3C8DBC") +  # Professional blue
+  geom_jitter(width = 0.1, alpha = 0.6, size = 2, color = "#1976D2") +  # Professional blue
   geom_hline(yintercept = 0, linetype = "dashed") +
   #dotted mean line
   geom_segment(
@@ -353,17 +353,17 @@ viral_target_table <- viral_target_enrichment_summary %>%
     booktabs = TRUE,
     caption = "Enrichment across all paired samples per viral target",
     digits = 3,
-    align = "lrrr",   # adjust as needed: text left, numbers right
+    align = "lrrr",   
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    latex_options = c("striped", "hold_position"), # polished journal look
+    latex_options = c("hold_position","scale_down"), 
     position = "center",
-    full_width = TRUE,
+    full_width = FALSE,
     font_size = 9
   ) %>%
-  row_spec(0, bold = TRUE) %>%  # strong header
-  collapse_rows(columns = 1, latex_hline = "major") # if repeating target names
+  row_spec(0, bold = TRUE) %>%  
+  collapse_rows(columns = 1, latex_hline = "major") 
 
 viral_target_table
 ```
@@ -436,6 +436,7 @@ paired_tbl <- cov_summary %>%
       `sapel` = "PSapeV",
       `tev` = "PTeV",
       `pkv` = "PKV",
+      `sapo` = "PSapoV",
     ),
     virus = fct_reorder(virus, enrichment_breadth, .fun = mean, .desc = TRUE)
   ) %>% 
@@ -492,6 +493,7 @@ wilcox_summary_kbl = wilcox_summary %>%
       `sapel` = "PSapeV",
       `tev` = "PTeV",
       `pkv` = "PKV",
+      `sapo` = "PSapoV",
     )
   ) %>% 
   rename(
@@ -513,9 +515,9 @@ wilcox_summary_kbl = wilcox_summary %>%
     format.args = list(big.mark = ",")
   ) %>%
   kable_styling(
-    latex_options = c("striped", "hold_position"), # polished journal look
+    latex_options = c("hold_position","scale_down"), # polished journal look
     position = "center",
-    full_width = TRUE,
+    full_width = FALSE,
     font_size = 9
   ) %>%
   row_spec(0, bold = TRUE) %>%  # strong header
@@ -531,7 +533,7 @@ mean_cov_df <- paired_tbl %>%
 # Create the boxplot for each targeted virus
 all_target_cov_plot = ggplot(paired_tbl, aes(x = virus, y = enrichment_breadth)) +
   geom_boxplot(width = 0.6, outlier.shape = 21, outlier.fill = "white", color = "black") +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +  # Professional green
+  geom_jitter(width = 0.1, alpha = 0.6, size = 2, color = "#7B1FA2") +  # Professional green
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_segment(
     data = mean_cov_df,
@@ -606,10 +608,10 @@ wilcox_res <- wilcox.test(
 
 pval <- wilcox_res$p.value
 
-log2fc_plot = ggplot(overall_tbl_summary, aes(x = "", y = rpm_enrichment)) +
+log2fc_plot = ggplot(overall_tbl_summary, aes(x = "All paired target detections (n=103)", y = rpm_enrichment)) +
   geom_boxplot(width = 0.4, fill = "gray90", color = "black", outlier.shape = 21, outlier.fill = "white") +
   scale_y_log10() +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#3C8DBC") +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#1976D2") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
   annotate("text", x = 1, y = max(overall_tbl_summary$rpm_enrichment, na.rm = TRUE) * 1.1,
            label = paste0("Wilcoxon p = ", signif(pval, 3)),
@@ -660,14 +662,17 @@ overall_cov_tbl_2 = cov_summary %>%
   summarize(cov_change_mean = mean(breadth_1x, na.rm = TRUE), .groups = "drop")
 
 # Boxplot of mean_nt_rpm by library_prep
-cov_plot = ggplot(paired_tbl, aes(x = "", y = enrichment_breadth)) +
+cov_plot = ggplot(paired_tbl, aes(x = "All paired target detections (n=103)", y = enrichment_breadth)) +
   geom_boxplot(width = 0.4, fill = "gray90", color = "black", outlier.shape = 21, outlier.fill = "white") +
-  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#27AE60") +
-  #scale_color_viridis(option = "viridis", direction = -1) +
+  geom_jitter(width = 0.1, alpha = 0.6, size = 1.5, color = "#7B1FA2") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
-  annotate("text", x = 1, y = max(paired_tbl$enrichment_breadth, na.rm = TRUE) * 1.1,
+  annotate("text", x = 1, y = 70,
            label = paste0("Wilcoxon p = ", signif(pval_cov, 3)),
            fontface = "italic", size = 4) +
+  scale_y_continuous(
+    limits = c(-25, 75),
+    breaks = seq(-25, 75, 25)
+  ) +
   labs(
     x = "",
     y = "Genome coverage increase (%)",

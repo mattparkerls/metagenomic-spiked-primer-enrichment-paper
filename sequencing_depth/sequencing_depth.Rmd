@@ -207,7 +207,7 @@ p1 <- ggplot(div_summary_libprep_filter, aes(x = depth/1e6, y = richness_mean, f
   geom_point(aes(y = richness_mean)) +
   #geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd), alpha = 0.2) +
   labs(x = "Sequencing depth (million reads)", y = "Species richness",
-       title = "a") +
+       title = "b") +
   theme_bw()
 p1
 
@@ -225,11 +225,11 @@ p2 <- ggplot(div_summary_sampletype_filter, aes(x = depth/1e6, y = richness_mean
   scale_color_brewer(palette = "Set2") +
   #geom_ribbon(aes(ymin = richness_mean - richness_sd, ymax = richness_mean + richness_sd), alpha = 0.2) +
   labs(x = "Sequencing depth (million reads)", y = "Species richness",
-       title = "b") +
+       title = "a") +
   theme_bw()
 p2
 
-combined_curves = p1 / p2
+combined_curves = p2 / p1
 combined_curves
 
 ```
@@ -313,7 +313,7 @@ model_div_data = res %>%
   mutate(
     depth_scaled = depth / 1e5,          # scale depth
     library_prep = factor(library_prep), # convert to factor
-    library_prep = relevel(library_prep, ref = "NGS")  # set NGS as reference
+    library_prep = relevel(library_prep, ref = "mNGS")  # set NGS as reference
   )
 
 # create base model for diversity metrics
@@ -415,7 +415,7 @@ det_long <- det_long %>%
   mutate(
     depth_scaled = depth / 1e5,          # scale depth
     library_prep = factor(library_prep), # convert to factor
-    library_prep = relevel(library_prep, ref = "NGS")  # set NGS as reference
+    library_prep = relevel(library_prep, ref = "mNGS")  # set NGS as reference
   )
 
 # create base model for detection probability
@@ -538,7 +538,7 @@ depth_grid <- seq(min(det_long$depth_scaled),
                   length.out = 100)
 
 newdata <- expand.grid(
-  library_prep = c("MSSPE", "NGS"),
+  library_prep = c("MSSPE", "mNGS"),
   depth_scaled = depth_grid
 )
 

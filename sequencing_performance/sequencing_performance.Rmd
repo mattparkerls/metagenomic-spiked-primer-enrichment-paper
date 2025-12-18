@@ -331,32 +331,35 @@ seq_metrics_all_long <- seq_metrics_all %>%
          value = value / 1e6, # Convert to millions of reads
     metric = recode(
       metric,
-      "total_reads" = "Total reads",
-      "total_reads_unique" = "Unique reads",
-      "total_reads_sub" = "Subsampled",
-      "passed_filters" = "Pass QC"
+      "total_reads" = "Total",
+      "total_reads_unique" = "Unique",
+      "total_reads_sub" = "Subsample",
+      "passed_filters" = "QC"
     )
   )
 
 plot_data <- seq_metrics_all_long %>%
   group_by(library_prep, metric) %>%
-  summarize(mean_value = mean(value), .groups = "drop")
+  summarize(mean_value = mean(value), sd_value = sd(value), .groups = "drop")
 
 overall_barplot = ggplot(plot_data, aes(x = library_prep, y = mean_value, fill = metric)) +
   geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7, linewidth = 0.2) +
+  geom_errorbar(aes(ymin = mean_value - sd_value, ymax = mean_value + sd_value),
+                width = 0.2, color = "black", linewidth = 0.4, 
+                position = position_dodge(width = 0.8)) +
   scale_fill_manual(
     values = c(
-      "Total reads" = "#3C8DBC",   
-      "Unique reads" = "#C0392B",   
-      "Pass QC" = "#7F8C8D", 
-      "Subsampled" = "#BDC3C7"      
+      "Total" = "#3C8DBC",   
+      "Unique" = "#8E6FB3",   
+      "QC" = "#7F8C8D", 
+      "Subsample" = "#BDC3C7"      
     ),
     name = ""
   ) + 
   labs(
     title = "a",
     x = "",
-    y = "Reads (millions)"
+    y = "Mean reads (millions) ± SD"
   ) +
   theme(
     legend.position = "bottom"
@@ -399,7 +402,7 @@ reds_palette <- brewer.pal(9, "Reds")  # Get a reds palette with 9 colors
 library_prep_levels <- levels(factor(viral_percentages$library_prep))
 
 
-viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt_percent, fill = sample_type)) +
+viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt_percent, color = sample_type)) +
   geom_boxplot(
     position = position_dodge(width = 0.75),
     outlier.fill = "white",
@@ -414,8 +417,7 @@ viral_nt_boxplot <- ggplot(viral_percentages, aes(x = library_prep, y = viral_nt
     alpha = 0.7,
     size = 1.8
   ) +
-  scale_fill_brewer(palette = "Set2") +
-  scale_color_brewer(palette = "Set2") +
+  scale_color_brewer(palette = "Dark2") +
   annotate("text", x = mean(1:length(library_prep_levels)), y = max(viral_percentages$viral_nt_percent, na.rm = TRUE) * 1.1,
            label = paste0("Wilcoxon p = ", signif(pval_viral_perc, 3)),
            fontface = "italic", size = 4) +
@@ -460,7 +462,7 @@ viral_nt_boxplot
 horizontal_space <- plot_spacer() + plot_layout(widths = c(0.2))
 
 combined_boxplots = (overall_barplot | horizontal_space | viral_nt_boxplot) +
-  plot_layout(ncol = 3, widths = c(1.5, 0.5, 1.5))
+  plot_layout(ncol = 3, widths = c(1.7, 0.3, 1.6))
 
 combined_boxplots
 ```
