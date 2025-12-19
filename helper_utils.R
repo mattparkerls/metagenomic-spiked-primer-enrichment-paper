@@ -2,8 +2,8 @@
 # Add Genus & Family Data 
 library(taxize)
 
-Sys.setenv(ENTREZ_KEY = "bc06c001a1756b20c2809290f211984ee007")
-Sys.setenv(ENTREZ_EMAIL = "matt@opendream.co.th")
+Sys.setenv(ENTREZ_KEY = "your_entrez_api_key_here")
+Sys.setenv(ENTREZ_EMAIL = "your_email_here")
 
 # Robust batch processing function with proper error handling
 get_genus_info_batch <- function(tax_ids, batch_size = 50) {
