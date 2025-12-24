@@ -7,6 +7,7 @@
 /shortread_utils/
 /pathogen_investigation/
 /msspe_regression/
+/primer_detection/
 *.nb.html
 *.tex
 *.html

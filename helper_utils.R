@@ -2,8 +2,8 @@
 # Add Genus & Family Data 
 library(taxize)
 
-Sys.setenv(ENTREZ_KEY = "your_entrez_api_key_here")
-Sys.setenv(ENTREZ_EMAIL = "your_email_here")
+Sys.setenv(ENTREZ_KEY = "YOUR_NCBI_API_KEY_HERE")
+Sys.setenv(ENTREZ_EMAIL = "YOUR_EMAIL_HERE")
 
 # Robust batch processing function with proper error handling
 get_genus_info_batch <- function(tax_ids, batch_size = 50) {
@@ -245,15 +245,7 @@ create_sample_metadata <- function(seq_metrics, pond_samples) {
       # Base: first sample ID (e.g. S10, PC1)
       base = str_extract(core, "^[A-Za-z]+\\d+"),
       
-      # Append -2 or -3 suffix only if not experiment 3
-      #suffix = case_when(
-        #!is_exp3 & str_detect(core, "_2$") ~ "-2",
-        #!is_exp3 & str_detect(core, "_3$") ~ "-3",
-        #TRUE ~ ""
-      #),
-      
       # Lowercase base sample name
-      #base_sample = tolower(paste0(base, suffix)),
       base_sample = tolower(base),
       
       # Mark which experiment number
