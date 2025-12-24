@@ -1,6 +1,6 @@
 # Metagenomic Spiked Primer Enrichment Analysis
 
-R-based analysis scripts comparing MSSPE vs NGS across three sequencing experiments. Each folder contains an R Markdown (`.Rmd`) file that renders publication-ready PDFs, figures, and tables.
+R-based analysis scripts comparing MSSPE vs mNGS across three sequencing experiments. Each folder contains an R Markdown (`.Rmd`) file that renders publication-ready PDFs, figures, and tables.
 
 ## Structure
 - `helper_utils.R`: Shared helpers (CSV processing, metadata parsing, export utilities, simulations).
