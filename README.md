@@ -3,7 +3,7 @@
 R-based analysis scripts comparing MSSPE vs mNGS across three sequencing experiments. Each folder contains an R Markdown (`.Rmd`) file that renders publication-ready PDFs, figures, and tables.
 
 ## Structure
-- `helper_utils.R`: Shared helpers (CSV processing, metadata parsing, export utilities, simulations).
+- `helper_utils.R`: Shared helpers (CSV processing, metadata parsing, export utilities, subsampling functions).
 - `data/`: Input data and per-experiment folders (`experiment_1/`, `experiment_2/`, `experiment_3/`, `experiment_all/`).
 - Analysis markdown files (each has an `.Rmd` and outputs):
   	- `primer_tables/` (section 2.1)
