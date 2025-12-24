@@ -1,0 +1,83 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(kableExtra)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+knitr::opts_chunk$set(dev = "cairo_pdf")
+```
+
+
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+primer_data <- read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/primer_data.csv", stringsAsFactors = TRUE)
+
+primer_tbl = primer_data %>% 
+  mutate(
+    num_prim_kb = round(num_prim_kb, 2),
+    num_ref_kb = round(num_ref_kb, 2),
+  ) %>% 
+  arrange(virus) %>% 
+  select(virus, num_primers, num_fwd, num_rev, num_refs, num_prim_kb, num_ref_kb) %>% 
+  rename(
+    "Virus" = virus,
+    "Forward" = num_fwd,
+    "Reverse" = num_rev,
+    "References" = num_refs,
+    "Primers / kb genome" = num_prim_kb,
+    "Refs / kb genome" = num_ref_kb,
+    "Total Primers" = num_primers,
+  ) %>% 
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    caption = "",
+    digits = 3,
+    align = "lrrrrrr",   
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position","scale_down"), 
+    position = "center",
+    full_width = FALSE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>% 
+   row_spec(1:nrow(primer_data), hline_after = TRUE)  
+
+primer_tbl
+```
+
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/primer_tables"
+```
+
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(table_dir = table_dir)
+
+if (exists("primer_tbl")) {
+  export_table_png(
+    latex_table = primer_tbl,
+    table_dir = table_dir,
+    output_basename = "primer_tbl.png"
+  )
+}
+
+```

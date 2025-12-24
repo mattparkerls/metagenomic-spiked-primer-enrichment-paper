@@ -1,0 +1,773 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+---
+
+```{r}
+library(tidyverse)  
+library(vegan)      
+library(ggplot2)    
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(kableExtra)
+library(viridis)
+library(superheat)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+knitr::opts_chunk$set(dev = "cairo_pdf")
+
+```
+
+Sample Taxon Reports
+```{r}
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# separate slurry from pond samples
+pond_samples = c("s9","s10","s19","s20")
+
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples) %>%
+  select(sample_name, base_sample, library_prep, experiment, water_control, infection_class, sample_type)
+
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+all_data_species <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  filter(water_control == "No") %>% 
+  filter(infection_class != "Definite") # filter out positive controls
+
+# Recode values for publication
+all_data_species = all_data_species %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  ) 
+```
+
+Positive Inclusion Criteria
+```{r}
+species_data_filtered = all_data_species %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50)
+```
+
+
+Taxonomic Composition
+```{r}
+# Create a taxa table
+taxa_table <- species_data_filtered %>%
+  select(tax_id, tax_level, name, genus_tax_id, category, library_prep, nt_rpm, nt_count, base_sample, sample_type) %>%
+  distinct() %>%  # only unique taxa
+  filter(!is.na(category)) %>%   # filter out species with no aligned category
+  filter(category %in% c("archaea","bacteria","eukaryota","viruses")) # because some blank categories are not NA
+
+phylum_composition_overall <- taxa_table %>%
+  group_by(category) %>%
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Compare library prep at different taxonomic levels (e.g., phylum level)
+phylum_composition <- taxa_table %>%
+  group_by(category, library_prep, sample_type) %>%
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  group_by(library_prep, sample_type) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+
+```
+
+```{r}
+# Visualize composition by library prep method
+tax_comp_libprep = ggplot(phylum_composition, aes(x = library_prep, y = relative_abundance, fill = category)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ sample_type) +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
+  theme_minimal() +
+  labs(
+    title = "",
+    x = "",
+    y = "Relative Abundance (%)",
+    fill = "Biological grouping"
+  ) +
+  theme()
+tax_comp_libprep
+
+```
+
+Diversity
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+
+# Function to compute diversity comparison table
+compute_diversity_results <- function(df) {
+  species_agg <- df %>%
+    group_by(sample_name, tax_id) %>%
+    summarise(nt_count = sum(nt_count, na.rm = TRUE), .groups = "drop")
+
+  abundance_matrix <- species_agg %>%
+    pivot_wider(names_from = sample_name, values_from = nt_count, values_fill = 0)
+
+  abund_mat <- as.matrix(abundance_matrix[,-1])
+  rownames(abund_mat) <- abundance_matrix$tax_id
+
+  diversity_tbl <- data.frame(
+    sample_name = colnames(abund_mat),
+    Shannon = apply(abund_mat, 2, vegan::diversity, index = "shannon"),
+    Simpson = apply(abund_mat, 2, vegan::diversity, index = "simpson"),
+    Richness = apply(abund_mat, 2, function(x) sum(x > 0))
+  ) %>%
+    left_join(df %>% 
+                select(sample_name, library_prep, base_sample, sample_type) %>% 
+                distinct(),
+              by = "sample_name")
+  
+  diversity_tbl <- diversity_tbl %>%
+  group_by(base_sample, library_prep) %>%
+  summarise(
+    Shannon = mean(Shannon),
+    Simpson = mean(Simpson),
+    Richness = mean(Richness),
+    .groups = "drop"
+  )
+  
+  diversity_paired = diversity_tbl %>%
+    pivot_wider(
+      id_cols = base_sample,
+      names_from = library_prep,
+      values_from = c(Shannon, Simpson, Richness)
+    )
+
+    metrics <- c("Shannon", "Simpson", "Richness")
+         
+  results <- lapply(metrics, function(metric) {
+    ngs <- diversity_paired[[paste0(metric, "_NGS")]]
+    msspe <- diversity_paired[[paste0(metric, "_MSSPE")]]
+
+    test <- wilcox.test(ngs, msspe, paired = TRUE)
+
+    data.frame(
+      metric = metric,
+      NGS = mean(ngs, na.rm = TRUE),
+      MSSPE = mean(msspe, na.rm = TRUE),
+      `p-value` = test$p.value
+    )
+  })
+
+  bind_rows(results)
+}
+
+# ---- Create three datasets ----
+species_slurry <- species_data_filtered %>% filter(sample_type == "slurry")
+species_env <- species_data_filtered %>% filter(sample_type == "environmental")
+
+# ---- Compute results ----
+tbl_overall <- compute_diversity_results(species_data_filtered) %>% mutate(Type = "Overall")
+tbl_slurry  <- compute_diversity_results(species_slurry) %>% mutate(Type = "Slurry")
+tbl_env     <- compute_diversity_results(species_env) %>% mutate(Type = "Wastewater")
+
+# ---- Combine ----
+results_all <- bind_rows(tbl_slurry, tbl_env, tbl_overall) %>%
+  rename("Diversity Measure" = metric)
+
+# ---- Final kable ----
+results_all_kbl = results_all %>%
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    caption = "Comparison of diversity metrics between library preparation methods by sample type",
+    digits = 2,
+    align = "lrrr",  
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("striped", "hold_position"), 
+    position = "center",
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  
+  collapse_rows(columns = 1, latex_hline = "major") 
+```
+
+```{r}
+# 1. Aggregate counts per tax_id per sample
+species_agg <- species_data_filtered %>%
+  group_by(sample_name, tax_id) %>%
+  summarise(nt_count = sum(nt_count, na.rm = TRUE), .groups = "drop")
+
+# 2. Create abundance matrix (taxa x samples)
+abundance_matrix <- species_agg %>%
+  pivot_wider(
+    names_from = sample_name, 
+    values_from = nt_count,
+    values_fill = 0
+  )
+
+# Convert to numeric matrix and set rownames
+abund_mat <- as.matrix(abundance_matrix[,-1])
+rownames(abund_mat) <- abundance_matrix$tax_id
+
+# 3. Compute diversity metrics per sample
+diversity_tbl <- data.frame(
+  sample_name = colnames(abund_mat),
+  Shannon = apply(abund_mat, 2, vegan::diversity, index = "shannon"),
+  Simpson = apply(abund_mat, 2, vegan::diversity, index = "simpson"),
+  Richness = apply(abund_mat, 2, function(x) sum(x > 0))
+)
+
+# 4. Add library prep info
+diversity_tbl <- diversity_tbl %>%
+  left_join(species_data_filtered %>% 
+              select(sample_name, library_prep, base_sample, sample_type) %>% 
+              distinct(), by = "sample_name")
+
+# Compare alpha diversity between library prep methods
+shannon_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Shannon, color = library_prep)) +
+  geom_boxplot() +
+  scale_fill_viridis(option = "viridis", direction = -1) +
+  theme_minimal() +
+  labs(title = "a",
+       x = "", 
+       y = "Shannon Diversity Index") +
+  theme(legend.position = "none")
+
+simpson_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Simpson, color = library_prep)) +
+  geom_boxplot() +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = 1) +
+  theme_minimal() +
+  labs(title = "b",
+       x = "", 
+       y = "Simpson Diversity Index") +
+  theme(legend.position = "none")
+
+rich_libprep_plot = ggplot(diversity_tbl, aes(x = library_prep, y = Richness, color = library_prep)) +
+  geom_boxplot() +
+  scale_fill_viridis(discrete = TRUE, option = "mako", direction = 1) +
+  theme_minimal() +
+  labs(title = "c",
+       x = "", 
+       y = "Species Richness") +
+  theme(legend.position = "none")
+
+horizontal_space <- plot_spacer()
+combined_diversity_plots = (shannon_libprep_plot | horizontal_space | simpson_libprep_plot | horizontal_space | rich_libprep_plot)
+  plot_layout(ncol = 5, widths = c(2, 0.2, 2, 0.2, 2))
+  
+combined_diversity_plots
+
+```
+
+Top Viral Genera
+```{r}
+# Extract viral category data
+virus_data <- species_data_filtered %>%
+  filter(category == "viruses") %>% 
+  filter(is_phage == "false") %>%  # filter out phages as marked by CZID
+  filter(genus_tax_id != -200) %>% 
+  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|"))) 
+
+# Add genus columns to the dataframe
+genus_data <- get_genus_info_batch(virus_data$tax_id, batch_size = 100)
+
+# Combine with original dataframe
+virus_data <- cbind(virus_data, genus_data) %>% 
+  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus",
+                            "Alphapapillomavirus","Nicoomyvirus","Myrnavirus","Lillamyvirus","Kahnovirus",
+                            "Moumouvirus","Kehishuvirus","Gamaleyavirus","Tupanvirus","Audreyjarvisvirus",
+                            "Mimivirus","Muminvirus","Immutovirus","Buhlduvirus","Phapecoctavirus",
+                            "Samwavirus","Denvervirus","Ferozepurvirus","Wotdevirus",
+                            "Miltoncavirus","Melianvirus","Cotonvirus","Justusliebigvirus","Tequatrovirus",
+                            "Pawinskivirus","Cohcovirus","Tanisvirus","Matsuvirus","Kenoshavirus","Pacinivirus",
+                            "Cedarrivervirus","Eurybiavirus","Kagunavirus","Lahexavirus",
+                            "Marfavirus","Popoffvirus","Quivirus","Skogvirus","Tepukevirus","Traversvirus",
+                            "Zhangjivirus","Aurodevirus","Lambovirus","Pahexavirus","Skunavirus",
+                            "Tequatrovirus","Beenievirus","Brujitavirus","Lebriduvirus","Nevevirus","Pamirivirus",
+                            "Rahariannevirus","Segzyvirus","Bertelyvirus","Buchananvirus","Ferozepurvirus","Kehishuvirus",
+                            "Matsuvirus","Moabitevirus","Nieuwekanaalvirus","Serwervirus","Cimandefvirus","Denvervirus",
+                            "Nipunavirus","Pawinskivirus","Sextaecvirus","Finchvirus","Haetaevirus","Ittyvirus","Muminvirus",
+                            "Saltrevirus","Shandongvirus","Cohcovirus","Elemovirus","Fremauxvirus","Hattifnattvirus","Juiceboxvirus",
+                            "Mydovirus","Omegavirus","Phapecoctavirus","Samwavirus","Shirahamavirus","Stormageddonvirus",
+                            "Vicoquintavirus","Bihckevirus","Elmenteitavirus","Henunavirus","Justusliebigvirus","Menderavirus",
+                            "Myradeevirus","Onyinyevirus","Plasmavirus","Shuimuvirus","Swiduovirus","Vipetofemvirus","Archimedesvirus",
+                            "Bixzunavirus","Gamaleyavirus","Jwalphavirus","Kumottavirus","Miltoncavirus","Plateaulakevirus",
+                            "Skatevirus","Tanisvirus","Wotdevirus","Buchavirus")) # filter out known phages
+
+```
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+# get table of only unique species
+taxa_table_genus <- virus_data %>%
+  select(tax_id, tax_level, name, genus_tax_id, genus_name, category, library_prep, nt_rpm, nt_count, base_sample, sample_type) %>%
+  distinct() %>%  # only unique taxa
+  filter(!is.na(genus_name))  # filter out species with no aligned category
+
+# Calculate viral relative abundance of each viral genus (among all viruses)
+genus_composition <- taxa_table_genus %>%
+  #group_by(genus_name, library_prep) %>%
+  group_by(genus_name) %>% 
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  #group_by(library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Calculate mean nt_rpm for each taxon across samples
+genus_summary <- virus_data %>%
+  group_by(genus_name, library_prep) %>%
+  filter(!genus_name %in% c("Alphapapillomavirus","Nicoomyvirus","Myrnavirus")) %>% # filter out known phages
+  filter(genus_tax_id != -200) %>% 
+  summarize(mean_nt_rpm = mean(nt_rpm, na.rm = TRUE),
+            total_reads = sum(nt_count, na.rm = TRUE),
+            .groups = "drop") %>%
+  na.omit() %>% 
+  arrange(desc(mean_nt_rpm))
+
+# Select top 10 genus names by mean nt_rpm
+top_genus_names <- genus_summary %>%
+  group_by(genus_name, library_prep) %>%
+  summarize(mean_rpm = mean_nt_rpm, .groups = "drop") %>%
+  arrange(desc(mean_rpm)) %>%
+  slice_head(n = 20) %>%
+  pull(genus_name)
+
+# Filter data for top taxa
+top_genus_data <- virus_data %>%
+  filter(genus_name %in% top_genus_names)
+  #na.omit()
+
+# Create overall table with Top Viral Genera
+top_genus_summary = top_genus_data %>% 
+  drop_na(genus_name) %>% 
+  group_by(genus_name) %>% 
+  summarise(mean_rpm = mean(nt_rpm), .groups = "drop")
+  #slice_head(n=20)
+
+# get frequency of each genus
+genus_counts <- virus_data %>%
+  drop_na(genus_name) %>% 
+  count(genus_name, sort = TRUE) %>%
+  mutate(genus_name = fct_reorder(genus_name, n))
+
+# get proportion of time genus is detected in each sample
+virus_sample_per = virus_data %>% 
+  drop_na(genus_name) %>% 
+  group_by(genus_name) %>% 
+  summarize(
+    perc_of_samples = n_distinct(sample_name) / n_distinct(.$sample_name)
+    ) %>% 
+  arrange(desc(perc_of_samples))
+
+# join back to overall table
+top_genus_summary = top_genus_summary %>% 
+  left_join(genus_counts, by = "genus_name") %>% 
+  left_join(virus_sample_per, by = "genus_name") %>% 
+  left_join(genus_composition, by = "genus_name") %>% 
+  arrange(desc(perc_of_samples))
+
+top_genus_summary_kbl = top_genus_summary %>%
+  rename(
+    "Genus" = genus_name,
+    "rPM" = mean_rpm,
+    "Species detections" = n,
+    "Percent of Samples" = perc_of_samples,
+    "Relative Abundance*" = relative_abundance
+  ) %>% 
+  select(-total_abundance) %>% 
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    caption = "Most abundant genera across all samples",
+    digits = 2,
+    align = "lrrr",   
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position","scale_down"), 
+    position = "center",
+    full_width = TRUE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  
+  collapse_rows(columns = 1, latex_hline = "major") 
+
+top_genus_summary
+```
+
+
+Virus Overview
+```{r}
+# get all unique non phage virus genera across all samples
+dim(table(virus_data$genus_name))
+
+# get all unique non phage virus species across all samples
+dim(table(virus_data$name))
+```
+
+Charting the Viral Community
+```{r}
+library(forcats)
+library(RColorBrewer)
+library(viridis)
+library(scales)
+library(ggtext)
+library(treemap)
+library(treemapify)
+```
+
+```{r}
+# Count occurrences of each genus (or use your abundance measure)
+genus_counts <- virus_data %>%
+  drop_na(genus_name) %>% 
+  count(genus_name, sort = TRUE) %>%
+  mutate(genus_name = fct_reorder(genus_name, n))
+
+# For top N genera (adjust N as needed)
+top_genera <- genus_counts %>%
+  slice_head(n = 20)  # Show top 20 genera
+
+# Percent of samples lollipop
+top_genera_lollipop <- ggplot(top_genus_summary, aes(x = perc_of_samples, y = reorder(genus_name, perc_of_samples))) +
+  geom_segment(aes(x = 0, xend = perc_of_samples, y = genus_name, yend = genus_name), 
+               color = "gray70", size = 0.5) +
+  geom_point(aes(color = perc_of_samples), size = 3, alpha = 0.8) +
+  scale_color_viridis_c(name = "Count", option = "turbo", direction = 1) +
+  scale_x_continuous(expand = c(0, 0), labels = comma_format()) +
+  labs(
+    title = "a",
+    x = "Proportion (%)",
+    y = "Viral Genus"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 1),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10, face = "italic"),
+    axis.text.x = element_text(size = 10),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+# Relative Abundance Treemap
+top_genera_treemap <- ggplot(top_genus_summary, aes(area = relative_abundance, fill = relative_abundance, label = genus_name)) +
+  geom_treemap(alpha = 0.8, color = "white", size = 1) +
+  geom_treemap_text(color = "white", place = "centre", size = 10, 
+                    family = "Arial", fontface = "bold") +
+  scale_fill_viridis_c(name = "Relative Abundance (%)", option = "turbo", direction = 1) +
+  labs(
+    title = "b",
+    caption = "Relative abundance shown by area size and color"
+  ) +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray60"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 1),
+    legend.position = "right",
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+# genus comp by lib prep
+top_genus_composition_prep <- taxa_table_genus %>%
+  group_by(genus_name, library_prep) %>%
+  rename(
+    "Library Prep" = library_prep
+  ) %>% 
+  summarize(mean_rpm = mean(nt_rpm, na.rm = TRUE), .groups = 'drop') %>%
+  add_count(genus_name) %>%
+  filter(n == 2) %>%
+  group_by(genus_name) %>%
+  mutate(total = mean(mean_rpm)) %>%
+  ungroup() %>%
+  slice_max(total, n = 20)
+
+#4 Create a boxplot for the top 10 taxa, grouped by control status
+genus_boxplot <- ggplot(top_genus_composition_prep, aes(x = genus_name, y = mean_rpm, fill = `Library Prep`)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+    scale_fill_brewer(palette = "Paired") +
+    labs(title = "c",
+         x = "Viral Genus",
+         y = "Reads per million (rPM)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+combined_top_genera_plots = (top_genera_lollipop | genus_boxplot) / top_genera_treemap +
+  plot_layout(ncol = 1, heights = c(6.5, 6.5))
+  
+combined_top_genera_plots
+
+top_genera_lollipop
+genus_boxplot
+top_genera_treemap
+```
+
+
+```{r}
+# Summarize at different taxonomic levels for each sample
+phylum_composition_samples <- taxa_table %>%
+  group_by(category, base_sample) %>%
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  group_by(base_sample) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Visualize composition by sample
+tax_comp_plot_all_samples = ggplot(phylum_composition_samples, aes(x = base_sample, y = relative_abundance, fill = category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis", direction = -1) +
+  theme_minimal() +
+  labs(title = "Taxonomic Composition across All Samples",
+       x = "Sample", 
+       y = "Relative Abundance (%)",
+       fill = "Phylum") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+tax_comp_plot_all_samples
+
+```
+
+```{r}
+genus_composition_all_samples <- taxa_table_genus %>%
+  group_by(base_sample,genus_name) %>% 
+  summarize(total_abundance = sum(nt_rpm, na.rm = TRUE)) %>%
+  filter(total_abundance > 30) %>% 
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100)
+
+# Visualize genera composition by sample
+genus_comp_plot_all_samples = ggplot(genus_composition_all_samples, aes(x = base_sample, y = relative_abundance, fill = genus_name)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis(discrete = TRUE, option = "viridis") +
+  theme_minimal() +
+  labs(title = "Genus Composition across All Samples",
+       x = "Sample", 
+       y = "Relative Abundance (%)",
+       fill = "Genera") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+genus_comp_plot_all_samples
+
+```
+Superheat microbial overlap plotting
+```{r}
+name_targets = c(
+  "PBoV",   # Porcine bocavirus
+  "PCV",    # Porcine circovirus 2
+  "PKV",    # Porcine kobuvirus / Aichivirus C
+  "EV-G",   # Porcine enterovirus G
+  "PTeV",   # Porcine teschovirus A
+  "PAstV",  # Porcine astrovirus 4
+  "PSapoV", # Porcine sapovirus
+  "PSapeV", # Porcine sapelovirus
+  "HPV18"   # Human papillomavirus 7/18
+)
+
+# Add standardized name groups using helper function
+viral_genera = add_viral_name_groups(taxa_table_genus)
+
+# get proportion of time genus is detected in each sample
+viral_genera = viral_genera %>% 
+  left_join(virus_sample_per, by = "genus_name") %>% 
+    filter(!genus_name %in% c("Orthopicobirnavirus","Protoambidensovirus","Tobamovirus","Carlavirus","Sobemovirus",
+                            "Kratosvirus","Comovirus","Cripavirus","Marnavirus","Potyvirus",
+                            "Aparavirus","Iteradensovirus","Betaentomopoxvirus","Porprismacovirus",
+                            "Iflavirus","Cucumovirus","Narnavirus","Klosneuvirus","Nauglamirvirus",
+                            "Mitovirus","Machlomovirus","Prasinovirus","Betapartitivirus","Alphabaculovirus",
+                            "Chlorovirus","Fadolivirus","Tritimovirus","Alphachrysovirus","Deltaentomopoxvirus",
+                            "Indivirus","Rheavirus","Solendovirus","Tethysvirus","Tupanvirus","Alphaendornavirus",
+                            "Fijivirus","Megavirus","Moumouvirus","Prasinovirus","Sopolycivirus","Theiavirus",
+                            "Unuamitovirus","Alphapithovirus","Betapartitivirus","Machlomovirus","Oceanusvirus",
+                            "Pefuambidensovirus","Stangrhavirus","Tobamovirus","Ampelovirus","Biavirus","Aparavirus",
+                            "Kratosvirus","Marafivirus","Prymnesiovirus","Totivirus","Catovirus","Cotonvirus",
+                            "Crinivirus","Nepovirus","Fabavirus","Gammacarmovirus","Hokovirus",
+                            "Orthopicobirnavirus","Aglavirus","Scythevirus","Gemykrogvirus","Gemykibivirus",
+                            "Gemycircularvirus","Galvornvirus","Triatovirus","Almendravirus")) # filter out non vertebrae viruses
+
+# Create heatmap structure 
+genus_composition_heat <- viral_genera %>%
+  mutate(
+    viral_target = str_detect(name_group, regex(paste0("\b(", paste(name_targets, collapse = "|"), ")\b"), ignore_case = TRUE))
+  ) %>% 
+  filter(nt_rpm > 1) %>% 
+  group_by(sample_type, library_prep, genus_name) %>%
+  summarize(total_abundance = sum(nt_rpm), .groups="drop") %>%
+  group_by(sample_type, library_prep) %>%
+  mutate(relative_abundance = total_abundance / sum(total_abundance) * 100) %>%
+  ungroup() %>%
+  mutate(lp = paste(library_prep, sample_type, sep="-")) %>%
+  select(genus_name, lp, relative_abundance) %>%
+  pivot_wider(names_from = lp, values_from = relative_abundance, values_fill = 0)
+
+heat_mat <- genus_composition_heat %>%
+  column_to_rownames("genus_name") %>%
+  as.matrix()
+
+perc_vec <- viral_genera %>%
+  distinct(genus_name, perc_of_samples) %>%
+  filter(genus_name %in% rownames(heat_mat)) %>%
+  slice(match(rownames(heat_mat), genus_name)) %>%
+  pull(perc_of_samples)
+
+# order by percentage of samples
+ord <- order(perc_vec, decreasing = FALSE)
+heat_mat <- heat_mat[ord, , drop = FALSE]
+perc_vec <- perc_vec[ord]
+
+png("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures/superheat.png", height = 1200, width = 1050)
+superheat(
+  heat_mat,
+  row.title = "Viral Genus",
+  pretty.order.cols = TRUE,
+  legend.height = 0.3,
+  legend.width = 3.5,
+  legend.text.size = 14,
+  yr = perc_vec,
+  yr.plot.type = "bar",
+  yr.axis.name = "% samples where genus detected",
+  yr.bar.col = "grey40",
+  heat.lim = c(0.00001,100)
+  )
+dev.off()
+
+
+subset_ww_m <- heat_mat[heat_mat[ , "MSSPE-wastewater"] > 0.0001, ]
+nrow(subset_ww_m)
+
+subset_ww <- heat_mat[heat_mat[ , "mNGS-wastewater"] > 0.0001, ]
+nrow(subset_ww)
+
+subset_s_m <- heat_mat[heat_mat[ , "MSSPE-slurry"] > 0.0001, ]
+nrow(subset_s_m)
+
+subset_s <- heat_mat[heat_mat[ , "mNGS-slurry"] > 0.0001, ]
+nrow(subset_s)
+```
+
+Get DNA and RNA Vertebrae infecting pathogens
+```{r}
+ghost_data = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/filter_known_pathogens.csv", stringsAsFactors = FALSE)
+
+dna_virs = c(
+  "Hudisavirus",
+  "mastadenovirus",
+  "Circo",
+  "porprismacovirus",
+  "circular",
+  "bocavirus"
+)
+
+rna_virs = c(
+  "Astrovirus",
+  "picobirnavirus",
+  "Enterovirus",
+  "torovirus",
+  "Mamastrovirus",
+  "Posavirus",
+  "Rotavirus",
+  "Sapelovirus",
+  "Teschovirus",
+  "Bastrovirus",
+  "Husavirus",
+  "torovirus",
+  "Sapporo"
+)
+
+ghost_data_filtered = ghost_data %>% 
+  filter(!str_detect(name, paste(c("Alphapapillomavirus","Parvovirus"), collapse = "|"))) %>% 
+  mutate(
+    is_dna = str_detect(
+      name,
+      regex(paste(dna_virs, collapse = "|"), ignore_case = TRUE)
+    ),
+    is_rna = str_detect(
+      name,
+      regex(paste(rna_virs, collapse = "|"), ignore_case = TRUE)
+    )
+  ) %>% 
+  select(name, is_dna, is_rna)
+
+# get % of livestock or human hosts
+dim(table(ghost_data_filtered$name)) / dim(table(virus_data$name))
+
+# % of dna viruses
+length(table(ghost_data_filtered$name[ghost_data_filtered$is_dna==TRUE])) / dim(table(ghost_data_filtered$name))
+
+# % of rna viruses
+length(table(ghost_data_filtered$name[ghost_data_filtered$is_rna==TRUE])) / dim(table(ghost_data_filtered$name))
+
+
+```
+
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/microbial_community/tables"
+```
+
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("tax_comp_libprep")) {
+  export_plot_png(tax_comp_libprep, fig_dir, "tax_comp_libprep.png", width = 9, height = 5)
+}
+if (exists("tax_comp_plot_all_samples")) {
+  export_plot_png(tax_comp_plot_all_samples, fig_dir, "tax_comp_plot_all_samples.png", width = 9, height = 5)
+}
+if (exists("genus_comp_plot_all_samples")) {
+  export_plot_png(genus_comp_plot_all_samples, fig_dir, "genus_comp_plot_all_samples.png", width = 9, height = 5)
+}
+if (exists("combined_diversity_plots")) {
+  export_plot_png(combined_diversity_plots, fig_dir, "combined_diversity_plots.png", width = 9, height = 5)
+}
+if (exists("combined_top_genera_plots")) {
+  export_plot_png(combined_top_genera_plots, fig_dir, "combined_top_genera_plots.png", width = 9, height = 5)
+}
+if (exists("top_genera_lollipop")) {
+  export_plot_png(top_genera_lollipop, fig_dir, "top_genera_lollipop.png", width = 9, height = 5)
+}
+if (exists("genus_boxplot")) {
+  export_plot_png(genus_boxplot, fig_dir, "genus_boxplot.png", width = 9, height = 5)
+}
+if (exists("top_genera_treemap")) {
+  export_plot_png(top_genera_treemap, fig_dir, "top_genera_treemap.png", width = 9, height = 5)
+}
+if (exists("genus_heatmap")) {
+  export_plot_png(genus_heatmap, fig_dir, "genus_heatmap.png", width = 9, height = 5)
+}
+
+# Export a LaTeX-styled table to PNG 
+if (exists("results_all_kbl")) {
+  export_table_png(
+    latex_table = results_all_kbl,
+    table_dir = table_dir,
+    output_basename = "results_all_kbl.png"
+  )
+}
+if (exists("top_genus_summary_kbl")) {
+  export_table_png(
+    latex_table = top_genus_summary_kbl,
+    table_dir = table_dir,
+    output_basename = "top_genus_summary_kbl.png"
+  )
+}
+
+```
+

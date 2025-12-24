@@ -1,0 +1,473 @@
+---
+title: "R Notebook"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+    extra_dependencies: ["caption"]
+  header-includes:
+    - \usepackage{fontspec}
+    - \setmainfont{DejaVu Sans}
+    - \captionsetup[table]{labelformat=empty}
+
+---
+
+```{r}
+library(phyloseq)
+library(microbiome)
+library(tidyverse)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+library(stringr)
+library(patchwork)
+library(viridis)
+source("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/helper_utils.r")
+knitr::opts_chunk$set(dev = "cairo_pdf")
+
+```
+
+Sequencing Summary Metrics
+```{r}
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+seq_metrics %>% 
+  group_by(water_control) %>% 
+  summarize(Mean_reads = mean(passed_filters, na.rm = TRUE))
+    
+```
+
+
+Sample Taxon Reports
+```{r}
+# List all CSV files in the directory
+csv_files <- list.files(path = "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/experiment_all/sample_taxon_reports", pattern = ".*.csv$", full.names = TRUE)
+seq_metrics = read.csv("/Users/mattparker/Dropbox/Workspace/moops/manuscript1/data/sequencing_summary_metrics_all.csv", stringsAsFactors = FALSE)
+
+# Process all CSV files and combine them
+all_data <- bind_rows(lapply(csv_files, process_csv_file))
+
+# Pond sample names
+pond_samples = c("s9","s10","s19","s20")
+
+# Create sample metadata using helper function
+sample_metadata = create_sample_metadata(seq_metrics, pond_samples)
+
+# Merge the taxonomy data with metadata
+merged_data <- all_data %>%
+  left_join(sample_metadata, by = "sample_name")
+
+# Filter to include only species level (tax_level == 1) to avoid duplication
+species_data <- merged_data %>%
+  filter(tax_level == 1) %>% 
+  filter(water_control == "No") %>%   # filter out Negative Controls
+  filter(infection_class != "Definite") # filter out positive controls
+
+# Recode values for publication
+species_data = species_data %>% 
+  mutate(
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  ) 
+```
+
+```{r}
+
+species_data_filtered = species_data %>% 
+  filter(nt_rpm >= 1 | nr_rpm >= 1 | nt_count >=3) %>% # positive inclusion criteria
+  filter(nt_alignment_length > 50)
+
+```
+
+
+```{r}
+# Sequencing metrics ALL experiments
+seq_metrics_all = sample_metadata %>% 
+  filter(water_control == "No") %>%   # Filter out Negative Controls
+  filter(infection_class != "Definite") %>%  # Filter out positive controls
+  filter(!base_sample %in% c("s5-2")) %>% 
+  filter(experiment == 1 | experiment == 3) %>% 
+  mutate(
+    total_reads_sub = total_reads * subsampled_fraction, # Subsample total reads according to subsample fraction
+    total_reads_unique = total_reads / compression_ratio, # Unique reads
+    sample_type = recode(sample_type, `environmental` = "wastewater"),
+    library_prep = recode(library_prep, `NGS` = "mNGS")
+  )
+
+seq_metrics_summary = seq_metrics_all %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters),
+    names_glue = "{.value}_{library_prep}"
+  ) 
+
+```
+
+```{r, results='asis'}
+cat("\\captionsetup{labelformat=empty}")
+# -------------------------
+# Calculate viral percentages per sample
+# -------------------------
+sample_totals <- species_data %>%
+  select(-sample_type) %>% 
+  group_by(base_sample, library_prep) %>%
+  summarise(
+    total_nt_count = sum(nt_count, na.rm = TRUE),
+    total_nr_count = sum(nr_count, na.rm = TRUE),
+    total_nt_rpm   = sum(nt_rpm, na.rm = TRUE),
+    total_nr_rpm   = sum(nr_rpm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+virus_data <- species_data %>%
+  filter(category == "viruses")
+
+# Get non-phage viruses
+virus_non_phage_data <- virus_data %>%
+  filter(category == "viruses", is_phage == "false") %>% 
+  filter(!str_detect(name, paste(c("phage","Caudoviricetes","CrAss","Mitoviridae","Crassvirales","Siphoviridae","Podoviridae","Myoviridae"), collapse = "|"))) 
+
+# Add genus columns to the dataframe
+genus_data <- get_genus_info_batch(virus_non_phage_data$tax_id, batch_size = 100)
+
+# Combine with original dataframe
+virus_non_phage_data <- cbind(virus_non_phage_data, genus_data) %>% 
+  filter(!genus_name %in% c("Caudoviricetes sp.","Crassvirales sp.","Mitoviridae sp.","uncultured human fecal virus",
+                            "Alphapapillomavirus","Nicoomyvirus","Myrnavirus","Lillamyvirus","Kahnovirus",
+                            "Moumouvirus","Kehishuvirus","Gamaleyavirus","Tupanvirus","Audreyjarvisvirus",
+                            "Mimivirus","Muminvirus","Immutovirus","Buhlduvirus","Phapecoctavirus",
+                            "Samwavirus","Denvervirus","Ferozepurvirus","Wotdevirus",
+                            "Miltoncavirus","Melianvirus","Cotonvirus","Justusliebigvirus","Tequatrovirus",
+                            "Pawinskivirus","Cohcovirus","Tanisvirus","Matsuvirus","Kenoshavirus","Pacinivirus",
+                            "Cedarrivervirus","Eurybiavirus","Kagunavirus","Lahexavirus",
+                            "Marfavirus","Popoffvirus","Quivirus","Skogvirus","Tepukevirus","Traversvirus",
+                            "Zhangjivirus","Aurodevirus","Lambovirus","Pahexavirus","Skunavirus",
+                            "Tequatrovirus","Beenievirus","Brujitavirus","Lebriduvirus","Nevevirus","Pamirivirus",
+                            "Rahariannevirus","Segzyvirus","Bertelyvirus","Buchananvirus","Ferozepurvirus","Kehishuvirus",
+                            "Matsuvirus","Moabitevirus","Nieuwekanaalvirus","Serwervirus","Cimandefvirus","Denvervirus",
+                            "Nipunavirus","Pawinskivirus","Sextaecvirus","Finchvirus","Haetaevirus","Ittyvirus","Muminvirus",
+                            "Saltrevirus","Shandongvirus","Cohcovirus","Elemovirus","Fremauxvirus","Hattifnattvirus","Juiceboxvirus",
+                            "Mydovirus","Omegavirus","Phapecoctavirus","Samwavirus","Shirahamavirus","Stormageddonvirus",
+                            "Vicoquintavirus","Bihckevirus","Elmenteitavirus","Henunavirus","Justusliebigvirus","Menderavirus",
+                            "Myradeevirus","Onyinyevirus","Plasmavirus","Shuimuvirus","Swiduovirus","Vipetofemvirus","Archimedesvirus",
+                            "Bixzunavirus","Gamaleyavirus","Jwalphavirus","Kumottavirus","Miltoncavirus","Plateaulakevirus",
+                            "Skatevirus","Tanisvirus","Wotdevirus","Buchavirus")) # filter out known phages
+
+# All viruses including phages
+viral_percentages <- virus_data %>%
+  drop_na(base_sample) %>%
+  mutate(sample_type = recode(sample_type, `environmental` = "wastewater")) %>% 
+  group_by(base_sample, library_prep, sample_type) %>%
+  summarise(
+    viral_nt_count = sum(nt_count, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sample_totals, by = c("base_sample", "library_prep")) %>%
+  mutate(
+    viral_nt_percent = (viral_nt_count / total_nt_count) * 100,
+    viral_nt_percent = ifelse(is.nan(viral_nt_percent) | is.infinite(viral_nt_percent), NA, viral_nt_percent)
+  )
+
+viral_summary <- viral_percentages %>%
+  select(base_sample, library_prep, viral_nt_count, viral_nt_percent) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(viral_nt_count, viral_nt_percent),
+    names_glue = "{.value}_{library_prep}"
+  )
+
+# Only non-phage viruses
+viral_percentages_non_phage <- virus_non_phage_data %>%
+  drop_na(base_sample) %>%
+  mutate(sample_type = recode(sample_type, `environmental` = "wastewater")) %>% 
+  group_by(base_sample, library_prep, sample_type) %>%
+  summarise(
+    non_phage_viral_nt_count = sum(nt_count, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sample_totals, by = c("base_sample", "library_prep")) %>%
+  mutate(
+    non_phage_viral_nt_percent = (non_phage_viral_nt_count / total_nt_count) * 100,
+    non_phage_viral_nt_percent = ifelse(is.nan(non_phage_viral_nt_percent) | is.infinite(non_phage_viral_nt_percent), NA, non_phage_viral_nt_percent)
+  )
+
+viral_summary_non_phage <- viral_percentages_non_phage %>%
+  select(base_sample, library_prep, non_phage_viral_nt_count, non_phage_viral_nt_percent) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(non_phage_viral_nt_count, non_phage_viral_nt_percent),
+    names_glue = "{.value}_{library_prep}"
+  )
+
+# -------------------------
+# Create seq_metrics_summary
+# -------------------------
+seq_metrics_summary_tbl <- seq_metrics_all %>%
+  drop_na(base_sample) %>%
+  select(base_sample, library_prep, total_reads, passed_filters, compression_ratio) %>%
+  group_by(base_sample, library_prep) %>%  # ensure single row per sample+prep
+  summarise(
+    total_reads = sum(total_reads),
+    passed_filters = sum(passed_filters),
+    compression_ratio = mean(compression_ratio, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = c(total_reads, passed_filters, compression_ratio),
+    names_glue = "{.value}_{library_prep}"
+  ) %>%
+  left_join(viral_summary, by = "base_sample") %>%
+  left_join(viral_summary_non_phage, by = "base_sample") %>%
+  mutate(across(where(is.list), ~ as.numeric(unlist(.)))) %>%  # convert any list-columns to numeric
+  mutate(
+    passed_filters_msspe = (passed_filters_MSSPE / total_reads_MSSPE) * 100,
+    passed_filters_mngs   = (passed_filters_mNGS / total_reads_mNGS) * 100
+  ) %>%
+  select(base_sample, total_reads_mNGS, total_reads_MSSPE,
+         passed_filters_mngs, passed_filters_msspe,
+         compression_ratio_mNGS, compression_ratio_MSSPE,
+         viral_nt_percent_mNGS, viral_nt_percent_MSSPE, non_phage_viral_nt_percent_mNGS, non_phage_viral_nt_percent_MSSPE) %>%
+  arrange(desc(viral_nt_percent_MSSPE))
+
+# All experiments
+seq_metrics_summary_kbl <- seq_metrics_summary_tbl %>%
+  rename(
+    "Sample" = base_sample,
+    "Reads (MSSPE)" = total_reads_MSSPE,
+    "Reads (mNGS)" = total_reads_mNGS,
+    "Passed Filter % (MSSPE)" = passed_filters_msspe,
+    "Passed Filter % (mNGS)" = passed_filters_mngs,
+    "DCR (mNGS)" = compression_ratio_mNGS,
+    "DCR (MSSPE)" = compression_ratio_MSSPE,
+    "Viral Reads (MSSPE)" = viral_nt_percent_MSSPE,
+    "Viral Reads % (mNGS)" = viral_nt_percent_mNGS,
+    "Non-phage Reads % (MSSPE)" = non_phage_viral_nt_percent_MSSPE,
+    "Non-phage Reads % (mNGS)" = non_phage_viral_nt_percent_mNGS,
+  ) %>%
+  kable(
+    format = "latex",
+    booktabs = TRUE,
+    caption = "",
+    digits = 2,
+    align = "lrrrrrrrrrr",   
+    format.args = list(big.mark = ",")
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position","scale_down"), 
+    position = "center",
+    full_width = FALSE,
+    font_size = 9
+  ) %>%
+  row_spec(0, bold = TRUE) %>%  
+  collapse_rows(columns = 1, latex_hline = "major") 
+```
+
+
+
+```{r}
+seq_metrics_all %>% 
+    group_by(library_prep) %>%
+    summarize(mean_reads = mean(total_reads),
+              mean_reads_sub = mean(total_reads_sub),
+              mean_reads_unique = mean(total_reads_unique))
+
+seq_metrics_all_long <- seq_metrics_all %>%
+  pivot_longer(
+    cols = c(total_reads, total_reads_unique, total_reads_sub, passed_filters),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(metric = factor(metric, levels = c("total_reads", "total_reads_unique", "total_reads_sub", "passed_filters")),
+         value = value / 1e6, # Convert to millions of reads
+    metric = recode(
+      metric,
+      "total_reads" = "Total",
+      "total_reads_unique" = "Unique",
+      "total_reads_sub" = "Subsample",
+      "passed_filters" = "QC"
+    )
+  )
+
+plot_data <- seq_metrics_all_long %>%
+  group_by(library_prep, metric) %>%
+  summarize(mean_value = mean(value), sd_value = sd(value), .groups = "drop")
+
+overall_boxplot <- ggplot(
+  seq_metrics_all_long,
+  aes(x = library_prep, y = value, fill = metric)
+) +
+  geom_boxplot(
+    width = 0.65,
+    outlier.shape = 21,
+    outlier.size = 1.6,
+    outlier.fill = "white",
+    linewidth = 0.4,
+    position = position_dodge(width = 0.75)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Total" = "#3C8DBC",
+      "Unique" = "#8E6FB3",
+      "Subsample" = "#BDC3C7",
+      "QC" = "#7F8C8D"
+    ),
+    name = ""
+  ) +
+  labs(
+    title = "a",
+    x = "",
+    y = "Reads (millions)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+overall_boxplot
+```
+
+```{r}
+library(ggnewscale)
+library(RColorBrewer)
+
+# Create boxplot for viral NT percentage by control status
+mean_df_viral_perc <- viral_percentages_non_phage %>%
+  group_by(library_prep, sample_type) %>%
+  summarise(mean_value = mean(non_phage_viral_nt_percent, na.rm = TRUE))
+
+viral_summary_wilcox = viral_summary_non_phage %>% 
+    mutate(
+    viral_nt_percent_mNGS = replace_na(non_phage_viral_nt_percent_mNGS, 0), # set NAs to 0 for non detections
+    viral_nt_percent_MSSPE   = replace_na(non_phage_viral_nt_percent_MSSPE, 0), # set NAs to 0 for non detections
+    )
+
+# Paired Wilcoxon test BY sample type
+viral_wide <- viral_percentages_non_phage %>%
+  select(base_sample, library_prep, sample_type, non_phage_viral_nt_percent) %>%
+  pivot_wider(
+    names_from = library_prep,
+    values_from = non_phage_viral_nt_percent
+  ) %>%
+  mutate(
+    mNGS = replace_na(mNGS, 0),
+    MSSPE = replace_na(MSSPE, 0)
+  )
+
+wilcox_results <- viral_wide %>%
+  group_by(sample_type) %>%
+  summarise(
+    p_value = wilcox.test(
+      mNGS,
+      MSSPE,
+      paired = TRUE,
+      alternative = "two.sided"
+    )$p.value,
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    x = 1.5,
+    y = max(viral_percentages_non_phage$non_phage_viral_nt_percent, na.rm = TRUE) * 1.1
+  )
+
+library_prep_levels <- levels(factor(viral_percentages_non_phage$library_prep))
+
+
+viral_nt_boxplot <- ggplot(viral_percentages_non_phage, aes(x = library_prep, y = non_phage_viral_nt_percent, color = sample_type)) +
+  geom_boxplot(
+    position = position_dodge(width = 0.75),
+    outlier.fill = "white",
+    outlier.alpha = 0.5
+  ) +
+  geom_jitter(
+    aes(color = sample_type),
+    position = position_jitterdodge(
+      jitter.width = 0.10,
+      dodge.width  = 0.75
+    ),
+    alpha = 0.7,
+    size = 1.8
+  ) +
+  facet_wrap(~ sample_type, scales = "free_y") +
+  scale_color_brewer(palette = "Dark2") +
+  geom_text(
+    data = wilcox_results,
+    aes(x = x, y = y, label = paste0("p = ", signif(p_value, 3))),
+    inherit.aes = FALSE,
+    fontface = "italic",
+    size = 3.5,
+    color = "black"
+  ) +
+  stat_summary(
+    fun = median,
+    geom = "text",
+    aes(
+      label = round(..y.., 1),
+      group = sample_type      
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = -0.7,               # lift above the box
+    color = "black",
+    fontface = "bold",
+    size = 3
+  ) +
+  geom_segment(data = mean_df_viral_perc,
+               aes(x = as.numeric(library_prep) - 0.3,
+                   xend = as.numeric(library_prep) + 0.3,
+                   y = mean_value, yend = mean_value),
+               linetype = "dotted", color = "black") +
+  theme_bw() +
+  labs(
+    title = "b",
+    x = "",
+    y = "% Viral Reads",
+    fill = "Sample type",
+    color = "Sample type"
+  ) +
+  theme(
+    legend.position = "bottom"
+    )
+
+
+viral_nt_boxplot
+```
+
+```{r}
+horizontal_space <- plot_spacer() + plot_layout(widths = c(0.2))
+
+combined_boxplots = (overall_boxplot | horizontal_space | viral_nt_boxplot) +
+  plot_layout(ncol = 3, widths = c(1.7, 0.3, 1.6))
+
+combined_boxplots
+```
+
+EXPORT ALL FIGURES AND TABLES FTW
+```{r export_paths, include=FALSE}
+fig_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_performance/figures"
+table_dir <- "/Users/mattparker/Dropbox/Workspace/moops/manuscript1/sequencing_performance/tables"
+```
+
+```{r export_artifacts, results='asis', include=FALSE}
+cat("\\captionsetup{labelformat=empty}")
+# Use shared helpers from helper_utils.R to export plots and tables
+ensure_export_dirs(fig_dir = fig_dir, table_dir = table_dir)
+
+# Plots
+if (exists("combined_boxplots")) {
+  export_plot_png(combined_boxplots, fig_dir, "combined_boxplots.png", width = 9, height = 5)
+}
+
+# Export a LaTeX-styled table to PNG 
+if (exists("seq_metrics_summary_kbl")) {
+  export_table_png(
+    latex_table = seq_metrics_summary_kbl,
+    table_dir = table_dir,
+    output_basename = "seq_metrics_summary_kbl.png"
+  )
+}
+
+```
