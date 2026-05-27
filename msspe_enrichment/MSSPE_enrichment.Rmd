@@ -550,7 +550,7 @@ overall_tbl_summary = all_viruses %>%
     name_group = fct_reorder(name_group, log2FC, .fun = mean, .desc = TRUE)
   ) %>% 
   arrange(desc(log2FC))
-
+      
 # Calculate average enrichment overall
 median(overall_tbl_summary$log2FC)
 round(quantile(overall_tbl_summary$log2FC, 0.25, na.rm = TRUE), 2)
@@ -563,6 +563,13 @@ mean(overall_tbl_summary$rpm_enrichment)
 # IQR
 round(quantile(overall_tbl_summary$rpm_enrichment, 0.25, na.rm = TRUE), 2)
 round(quantile(overall_tbl_summary$rpm_enrichment, 0.75, na.rm = TRUE), 2)
+
+# effect size for enrichment
+wilcox_effsize(
+  data = overall_tbl_summary,
+  rpm_enrichment ~ 1,
+  mu = 1
+)
 
 # Paired Wilcoxon test across all samples
 wilcox_res <- wilcox.test(
@@ -605,6 +612,17 @@ overall_cov_tbl = wilcox_summary %>%
 mean(overall_cov_tbl$cov_change_mean)
 round(quantile(overall_cov_tbl$cov_change_mean, 0.25, na.rm = TRUE), 2)
 round(quantile(overall_cov_tbl$cov_change_mean, 0.75, na.rm = TRUE), 2)
+
+#effect size for coverage
+wilcox_effsize(
+  data = paired_tbl %>% 
+    pivot_longer(cols = c(breadth_1x_NGS, breadth_1x_MSSPE), 
+                 names_to = "method", 
+                 values_to = "breadth"),
+  breadth ~ method,
+  paired = TRUE,
+  ref.group = "breadth_1x_NGS"
+)
 
 # Is the different in coverage values significant?
 wilcox.test(
