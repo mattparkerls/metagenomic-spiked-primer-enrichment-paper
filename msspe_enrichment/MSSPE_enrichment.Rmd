@@ -404,8 +404,8 @@ paired_tbl <- cov_summary %>%
   arrange(desc(enrichment_breadth))
 
 # Summary table (1 row per metric)
-wilcox_summary = paired_tbl %>% 
-  replace_na(list(breadth_1x_MSSPE = 0, breadth_1x_NGS = 0, enrichment_breadth = 0)) %>% # Some samples had reads but no coverage
+wilcox_summary = paired_tbl %>%
+  filter(!is.na(breadth_1x_MSSPE), !is.na(breadth_1x_NGS)) %>%
   group_by(virus) %>%
   summarise(
     mean_ngs = round(mean(breadth_1x_NGS, na.rm = TRUE),2),
